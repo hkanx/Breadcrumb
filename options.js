@@ -1,3 +1,5 @@
+const SCRAP_STATUS = ["saved", "applied", "interviewing", "offer", "rejected"];
+
 const state = {
   companies: [],
   filteredItems: [],
@@ -5,8 +7,13 @@ const state = {
   searchTerm: "",
   velocity: [],
   mode: "company",
+  metaMode: "all",
   editingKey: null,
-  savingKey: null
+  savingKey: null,
+  diagnostics: {
+    lastStatus: null,
+    lastDraft: null
+  }
 };
 
 function formatDate(isoDate) {
@@ -36,6 +43,11 @@ function toMarkdown(companyName, position) {
     lines.push(`## Scrap ${index + 1}`);
     lines.push(`- Timestamp: ${scrap.timestamp}`);
     lines.push(`- URL: ${scrap.url || "N/A"}`);
+    lines.push(`- Status: ${scrap.status || "saved"}`);
+    lines.push(`- Favorite: ${scrap.favorite ? "yes" : "no"}`);
+    if ((scrap.tags || []).length) {
+      lines.push(`- Tags: ${(scrap.tags || []).join(", ")}`);
+    }
     if (scrap.note) {
       lines.push(`- Note: ${escapeMarkdown(scrap.note)}`);
     }
@@ -52,8 +64,8 @@ function toMarkdown(companyName, position) {
   return lines.join("\n");
 }
 
-function downloadMarkdown(filename, content) {
-  const blob = new Blob([content], { type: "text/markdown;charset=utf-8" });
+function downloadTextFile(filename, content, type = "text/plain;charset=utf-8") {
+  const blob = new Blob([content], { type });
   const url = URL.createObjectURL(blob);
   const link = document.createElement("a");
   link.href = url;
@@ -80,85 +92,111 @@ function isValidUrl(url) {
   }
 }
 
-function getPositions() {
-  const entries = [];
-  state.companies.forEach((company) => {
-    (company.positions || []).forEach((position) => {
-      entries.push({
-        type: "position",
-        companyName: company.name,
-        positionName: position.name,
-        position
-      });
-    });
-  });
-  return entries;
-}
-
-function getRecentScraps() {
-  const scraps = [];
-  state.companies.forEach((company) => {
-    (company.positions || []).forEach((position) => {
-      (position.scraps || []).forEach((scrap) => {
-        scraps.push({
-          type: "recent",
-          companyName: company.name,
-          positionName: position.name,
-          scrap
-        });
-      });
-    });
-  });
-
-  scraps.sort((a, b) => new Date(b.scrap.timestamp).getTime() - new Date(a.scrap.timestamp).getTime());
-  return scraps;
+function matchesMetaFilter(scrap) {
+  if (state.metaMode === "all") {
+    return true;
+  }
+  if (state.metaMode === "favorite") {
+    return Boolean(scrap.favorite);
+  }
+  return ["applied", "interviewing", "offer"].includes(scrap.status || "saved");
 }
 
 function matchesSearchText(text) {
   return text.toLowerCase().includes(state.searchTerm);
 }
 
-function getCompanySearchBlob(company) {
-  const parts = [company.name];
-  (company.positions || []).forEach((position) => {
-    parts.push(position.name);
-    (position.scraps || []).forEach((scrap) => {
-      parts.push(scrap.url || "", scrap.note || "", scrap.rawText || "");
+function scrapBlob(companyName, positionName, scrap) {
+  return `${companyName} ${positionName} ${scrap.url || ""} ${scrap.note || ""} ${scrap.rawText || ""} ${scrap.status || ""} ${(scrap.tags || []).join(" ")} ${scrap.favorite ? "favorite" : ""}`;
+}
+
+function getVisibleScraps() {
+  const result = [];
+  state.companies.forEach((company) => {
+    (company.positions || []).forEach((position) => {
+      (position.scraps || []).forEach((scrap) => {
+        if (!matchesMetaFilter(scrap)) {
+          return;
+        }
+        if (state.searchTerm && !matchesSearchText(scrapBlob(company.name, position.name, scrap).toLowerCase())) {
+          return;
+        }
+        result.push({ companyName: company.name, positionName: position.name, scrap });
+      });
     });
   });
-  return parts.join(" ").toLowerCase();
+  return result;
+}
+
+function getPositions() {
+  const entries = [];
+  state.companies.forEach((company) => {
+    (company.positions || []).forEach((position) => {
+      const hasVisible = (position.scraps || []).some((scrap) => {
+        if (!matchesMetaFilter(scrap)) {
+          return false;
+        }
+        if (!state.searchTerm) {
+          return true;
+        }
+        return matchesSearchText(scrapBlob(company.name, position.name, scrap).toLowerCase());
+      });
+
+      if (hasVisible) {
+        entries.push({ type: "position", companyName: company.name, positionName: position.name, position });
+      }
+    });
+  });
+  return entries;
+}
+
+function getRecentScraps() {
+  const scraps = getVisibleScraps().map((entry) => ({ ...entry, type: "recent" }));
+  scraps.sort((a, b) => new Date(b.scrap.timestamp).getTime() - new Date(a.scrap.timestamp).getTime());
+  return scraps;
 }
 
 function computeFilteredItems() {
   if (state.mode === "company") {
     state.filteredItems = state.companies
-      .filter((company) => !state.searchTerm || matchesSearchText(getCompanySearchBlob(company)))
+      .filter((company) => {
+        const companyMatches = !state.searchTerm || matchesSearchText(company.name.toLowerCase());
+
+        const hasVisible = (company.positions || []).some((position) =>
+          (position.scraps || []).some((scrap) => {
+            if (!matchesMetaFilter(scrap)) {
+              return false;
+            }
+            if (!state.searchTerm) {
+              return true;
+            }
+            return companyMatches || matchesSearchText(scrapBlob(company.name, position.name, scrap).toLowerCase());
+          })
+        );
+
+        return hasVisible;
+      })
       .map((company) => ({ type: "company", companyName: company.name }));
     return;
   }
 
   if (state.mode === "position") {
-    state.filteredItems = getPositions().filter((entry) => {
-      if (!state.searchTerm) {
-        return true;
-      }
-      const blob = `${entry.companyName} ${entry.positionName} ${(entry.position.scraps || []).map((scrap) => `${scrap.url || ""} ${scrap.note || ""} ${scrap.rawText || ""}`).join(" ")}`;
-      return matchesSearchText(blob.toLowerCase());
-    });
+    state.filteredItems = getPositions();
     return;
   }
 
-  state.filteredItems = getRecentScraps().filter((entry) => {
-    if (!state.searchTerm) {
-      return true;
-    }
-    const blob = `${entry.companyName} ${entry.positionName} ${entry.scrap.url || ""} ${entry.scrap.note || ""} ${entry.scrap.rawText || ""}`;
-    return matchesSearchText(blob.toLowerCase());
-  });
+  state.filteredItems = getRecentScraps();
 }
 
 function ensureSelectedItem() {
-  if (!state.selectedItem || !state.filteredItems.some((item) => JSON.stringify(item) === JSON.stringify(state.selectedItem))) {
+  if (!state.selectedItem) {
+    state.selectedItem = state.filteredItems[0] || null;
+    return;
+  }
+
+  const selectedKey = JSON.stringify(state.selectedItem);
+  const found = state.filteredItems.some((item) => JSON.stringify(item) === selectedKey);
+  if (!found) {
     state.selectedItem = state.filteredItems[0] || null;
   }
 }
@@ -187,42 +225,35 @@ function renderVelocityChart() {
   points.forEach((point) => {
     const bar = document.createElement("div");
     bar.className = "velocity-bar";
-    const height = Math.max(8, Math.round((point.count / maxCount) * 56));
-    bar.style.height = `${height}px`;
+    bar.style.height = `${Math.max(8, Math.round((point.count / maxCount) * 56))}px`;
     bar.title = `${point.date}: ${point.count} scrap${point.count === 1 ? "" : "s"}`;
     chart.append(bar);
   });
 }
 
-function rebuildVelocityFromCompanies(days = 14) {
-  const toLocalDayKey = (date) => {
-    const y = date.getFullYear();
-    const m = String(date.getMonth() + 1).padStart(2, "0");
-    const d = String(date.getDate()).padStart(2, "0");
-    return `${y}-${m}-${d}`;
-  };
+function renderDiagnostics() {
+  const summaryEl = document.getElementById("diagnostic-summary");
+  const textEl = document.getElementById("diagnostic-text");
 
-  const counts = new Map();
-  state.companies.forEach((company) => {
-    (company.positions || []).forEach((position) => {
-      (position.scraps || []).forEach((scrap) => {
-        const parsed = new Date(scrap.timestamp);
-        const key = Number.isNaN(parsed.getTime()) ? toLocalDayKey(new Date()) : toLocalDayKey(parsed);
-        counts.set(key, (counts.get(key) || 0) + 1);
-      });
-    });
-  });
-
-  const output = [];
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-  for (let offset = days - 1; offset >= 0; offset -= 1) {
-    const day = new Date(today);
-    day.setDate(today.getDate() - offset);
-    const key = toLocalDayKey(day);
-    output.push({ date: key, count: counts.get(key) || 0 });
+  if (!summaryEl || !textEl) {
+    return;
   }
-  return output;
+
+  const totalScraps = state.companies.reduce((sum, company) => {
+    return sum + (company.positions || []).reduce((posSum, position) => posSum + (position.scraps || []).length, 0);
+  }, 0);
+
+  const topBuckets = state.velocity
+    .filter((point) => point.count > 0)
+    .slice(-5)
+    .map((point) => `${point.date}:${point.count}`)
+    .join(" | ");
+
+  const lastStatus = state.diagnostics.lastStatus;
+  const statusText = lastStatus ? `${lastStatus.code || "UNKNOWN"} (${(lastStatus.confidence || 0) * 100}%)` : "No capture status yet";
+  summaryEl.textContent = `${totalScraps} scraps | ${statusText}`;
+
+  textEl.textContent = `Last message: ${lastStatus?.message || "N/A"}\nLast draft: ${state.diagnostics.lastDraft?.reason || "none"}\nVelocity buckets: ${topBuckets || "none"}`;
 }
 
 function renderSidebar() {
@@ -237,7 +268,6 @@ function renderSidebar() {
   state.filteredItems.forEach((item) => {
     const button = document.createElement("button");
     button.type = "button";
-
     const selected = JSON.stringify(item) === JSON.stringify(state.selectedItem);
     button.className = `company-button ${selected ? "active" : ""}`.trim();
 
@@ -259,6 +289,21 @@ function renderSidebar() {
   });
 }
 
+function createStatusSelect(scrap, onChange) {
+  const select = document.createElement("select");
+  SCRAP_STATUS.forEach((status) => {
+    const option = document.createElement("option");
+    option.value = status;
+    option.textContent = status;
+    if ((scrap.status || "saved") === status) {
+      option.selected = true;
+    }
+    select.append(option);
+  });
+  select.addEventListener("change", () => onChange(select.value));
+  return select;
+}
+
 function createScrapView({ companyName, positionName, scrap }) {
   const item = document.createElement("section");
   item.className = "scrap-item";
@@ -270,10 +315,24 @@ function createScrapView({ companyName, positionName, scrap }) {
   const meta = document.createElement("div");
   meta.className = "scrap-meta";
   const editedText = scrap.lastEditedAt ? ` | Edited: ${formatDate(scrap.lastEditedAt)}` : "";
-  meta.textContent = `${formatDate(scrap.timestamp)}${scrap.url ? ` | ${scrap.url}` : ""}${editedText}`;
+  meta.textContent = `${formatDate(scrap.timestamp)}${scrap.url ? ` | ${scrap.url}` : ""}${editedText} | confidence ${Math.round((scrap.confidence || 0) * 100)}%`;
 
   const controls = document.createElement("div");
   controls.className = "scrap-controls";
+
+  const favoriteButton = document.createElement("button");
+  favoriteButton.className = "btn-secondary";
+  favoriteButton.type = "button";
+  favoriteButton.textContent = scrap.favorite ? "★ Favorite" : "☆ Favorite";
+  favoriteButton.addEventListener("click", async () => {
+    await window.BreadcrumbStorage.toggleScrapFavorite(companyName, positionName, scrap.timestamp, !scrap.favorite);
+    await loadCompanies();
+  });
+
+  const statusSelect = createStatusSelect(scrap, async (status) => {
+    await window.BreadcrumbStorage.setScrapStatus(companyName, positionName, scrap.timestamp, status);
+    await loadCompanies();
+  });
 
   const editButton = document.createElement("button");
   editButton.className = "btn-secondary";
@@ -291,8 +350,7 @@ function createScrapView({ companyName, positionName, scrap }) {
   deleteButton.textContent = "Delete";
   deleteButton.disabled = isSaving;
   deleteButton.addEventListener("click", async () => {
-    const confirmed = window.confirm("Delete this saved scrap? This cannot be undone.");
-    if (!confirmed) {
+    if (!window.confirm("Delete this saved scrap? This cannot be undone.")) {
       return;
     }
 
@@ -311,11 +369,15 @@ function createScrapView({ companyName, positionName, scrap }) {
     await copyText(summary);
   });
 
-  controls.append(editButton, copyButton, deleteButton);
-
+  controls.append(favoriteButton, statusSelect, editButton, copyButton, deleteButton);
   item.append(meta, controls);
 
   if (!isEditing) {
+    const tagLine = document.createElement("p");
+    tagLine.className = "scrap-meta";
+    tagLine.textContent = `Tags: ${(scrap.tags || []).join(", ") || "none"}`;
+    item.append(tagLine);
+
     const text = document.createElement("p");
     text.className = "scrap-text";
     const shortened = (scrap.rawText || "").slice(0, 1600);
@@ -344,6 +406,11 @@ function createScrapView({ companyName, positionName, scrap }) {
   urlInput.name = "url";
   urlInput.value = scrap.url || "";
   urlInput.placeholder = "https://example.com/job";
+
+  const tagsInput = document.createElement("input");
+  tagsInput.name = "tags";
+  tagsInput.value = (scrap.tags || []).join(", ");
+  tagsInput.placeholder = "comma,separated,tags";
 
   const noteInput = document.createElement("textarea");
   noteInput.name = "note";
@@ -377,7 +444,7 @@ function createScrapView({ companyName, positionName, scrap }) {
 
   row.append(saveButton, cancelButton);
 
-  form.append(positionInput, urlInput, noteInput, textInput, row);
+  form.append(positionInput, urlInput, tagsInput, noteInput, textInput, row);
 
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
@@ -386,6 +453,7 @@ function createScrapView({ companyName, positionName, scrap }) {
     const nextUrl = urlInput.value.trim();
     const nextNote = noteInput.value;
     const nextRawText = textInput.value;
+    const nextTags = tagsInput.value.split(",").map((item) => item.trim()).filter(Boolean);
 
     if (!nextPosition) {
       window.alert("Position is required.");
@@ -414,28 +482,18 @@ function createScrapView({ companyName, positionName, scrap }) {
           return;
         }
 
-        const moved = await window.BreadcrumbStorage.moveScrapToPosition(
-          companyName,
-          positionName,
-          nextPosition,
-          scrap.timestamp
-        );
-
+        const moved = await window.BreadcrumbStorage.moveScrapToPosition(companyName, positionName, nextPosition, scrap.timestamp);
         if (!moved) {
           throw new Error("Unable to move scrap to the new position.");
         }
       }
 
-      const updated = await window.BreadcrumbStorage.updateScrap(
-        companyName,
-        nextPosition,
-        scrap.timestamp,
-        {
-          rawText: nextRawText,
-          note: nextNote,
-          url: nextUrl
-        }
-      );
+      const updated = await window.BreadcrumbStorage.updateScrap(companyName, nextPosition, scrap.timestamp, {
+        rawText: nextRawText,
+        note: nextNote,
+        url: nextUrl,
+        tags: nextTags
+      });
 
       if (!updated) {
         throw new Error("Unable to save edits for this scrap.");
@@ -485,7 +543,7 @@ function renderPositionCard(companyName, position) {
   exportButton.addEventListener("click", () => {
     const markdown = toMarkdown(companyName, position);
     const fileName = `${normalizeForFileName(companyName)}-${normalizeForFileName(position.name)}.md`;
-    downloadMarkdown(fileName, markdown);
+    downloadTextFile(fileName, markdown, "text/markdown;charset=utf-8");
   });
 
   actions.append(copyButton, exportButton);
@@ -493,9 +551,12 @@ function renderPositionCard(companyName, position) {
 
   const scrapList = document.createElement("div");
   scrapList.className = "scrap-list";
-  (position.scraps || []).forEach((scrap) => {
-    scrapList.append(createScrapView({ companyName, positionName: position.name, scrap }));
-  });
+  (position.scraps || [])
+    .filter((scrap) => matchesMetaFilter(scrap))
+    .filter((scrap) => !state.searchTerm || matchesSearchText(scrapBlob(companyName, position.name, scrap).toLowerCase()))
+    .forEach((scrap) => {
+      scrapList.append(createScrapView({ companyName, positionName: position.name, scrap }));
+    });
 
   card.append(header, scrapList);
   return card;
@@ -559,8 +620,19 @@ function renderMainView() {
 
 function applyFilterMode(mode) {
   state.mode = mode;
-  document.querySelectorAll(".btn-filter").forEach((button) => {
+  document.querySelectorAll(".btn-filter[data-mode]").forEach((button) => {
     button.classList.toggle("active", button.dataset.mode === mode);
+  });
+  computeFilteredItems();
+  ensureSelectedItem();
+  renderSidebar();
+  renderMainView();
+}
+
+function applyMetaFilter(meta) {
+  state.metaMode = meta;
+  document.querySelectorAll(".btn-filter[data-meta]").forEach((button) => {
+    button.classList.toggle("active", button.dataset.meta === meta);
   });
   computeFilteredItems();
   ensureSelectedItem();
@@ -576,21 +648,91 @@ function applySearch(term) {
   renderMainView();
 }
 
+async function refreshDiagnosticsFromBackground() {
+  try {
+    const response = await chrome.runtime.sendMessage({ type: "GET_LAST_CAPTURE_STATUS" });
+    if (response?.ok) {
+      state.diagnostics.lastStatus = response.status || null;
+      state.diagnostics.lastDraft = response.draft || null;
+    }
+  } catch (_error) {
+    // ignore
+  }
+}
+
 async function loadCompanies() {
   state.companies = await window.BreadcrumbStorage.getAlphabeticalCompanies();
   state.velocity = await window.BreadcrumbStorage.getDailyApplicationVelocity(14);
-  const scrapsInVault = state.companies.reduce((sum, company) => {
-    return sum + (company.positions || []).reduce((positionSum, position) => positionSum + (position.scraps || []).length, 0);
-  }, 0);
-  const velocityTotal = state.velocity.reduce((sum, point) => sum + point.count, 0);
-  if (scrapsInVault > 0 && velocityTotal === 0) {
-    state.velocity = rebuildVelocityFromCompanies(14);
-  }
+  await refreshDiagnosticsFromBackground();
   renderVelocityChart();
+  renderDiagnostics();
   computeFilteredItems();
   ensureSelectedItem();
   renderSidebar();
   renderMainView();
+}
+
+async function bulkApplyVisible(fn) {
+  const visible = getVisibleScraps();
+  for (const entry of visible) {
+    await fn(entry);
+  }
+  await loadCompanies();
+}
+
+function wireToolbarActions() {
+  document.getElementById("bulk-favorite")?.addEventListener("click", async () => {
+    await bulkApplyVisible(async ({ companyName, positionName, scrap }) => {
+      await window.BreadcrumbStorage.toggleScrapFavorite(companyName, positionName, scrap.timestamp, true);
+    });
+  });
+
+  document.getElementById("bulk-status-applied")?.addEventListener("click", async () => {
+    await bulkApplyVisible(async ({ companyName, positionName, scrap }) => {
+      await window.BreadcrumbStorage.setScrapStatus(companyName, positionName, scrap.timestamp, "applied");
+    });
+  });
+
+  document.getElementById("bulk-tag-core")?.addEventListener("click", async () => {
+    await bulkApplyVisible(async ({ companyName, positionName, scrap }) => {
+      const tags = [...(scrap.tags || []), "core"];
+      await window.BreadcrumbStorage.setScrapTags(companyName, positionName, scrap.timestamp, tags);
+    });
+  });
+
+  document.getElementById("bulk-export")?.addEventListener("click", async () => {
+    const visible = getVisibleScraps();
+    if (!visible.length) {
+      window.alert("No visible scraps to export.");
+      return;
+    }
+    const lines = visible.map((entry) => `# ${entry.companyName} | ${entry.positionName}\n\n${entry.scrap.rawText || ""}\n`).join("\n");
+    downloadTextFile("breadcrumb-visible-export.md", lines, "text/markdown;charset=utf-8");
+  });
+
+  document.getElementById("export-json")?.addEventListener("click", async () => {
+    const payload = await window.BreadcrumbStorage.exportVaultJson();
+    downloadTextFile("breadcrumb-vault.json", JSON.stringify(payload, null, 2), "application/json;charset=utf-8");
+  });
+
+  document.getElementById("import-json")?.addEventListener("change", async (event) => {
+    const file = event.target.files?.[0];
+    if (!file) {
+      return;
+    }
+
+    try {
+      const text = await file.text();
+      const payload = JSON.parse(text);
+      await window.BreadcrumbStorage.importVaultJson(payload);
+      await loadCompanies();
+      window.alert("Vault JSON imported successfully.");
+    } catch (error) {
+      window.alert(error instanceof Error ? error.message : "Failed to import JSON.");
+    } finally {
+      event.target.value = "";
+    }
+  });
 }
 
 document.addEventListener("DOMContentLoaded", async () => {
@@ -600,11 +742,15 @@ document.addEventListener("DOMContentLoaded", async () => {
     applySearch(event.target.value || "");
   });
 
-  document.querySelectorAll(".btn-filter").forEach((button) => {
-    button.addEventListener("click", () => {
-      applyFilterMode(button.dataset.mode);
-    });
+  document.querySelectorAll(".btn-filter[data-mode]").forEach((button) => {
+    button.addEventListener("click", () => applyFilterMode(button.dataset.mode));
   });
+
+  document.querySelectorAll(".btn-filter[data-meta]").forEach((button) => {
+    button.addEventListener("click", () => applyMetaFilter(button.dataset.meta));
+  });
+
+  wireToolbarActions();
 
   try {
     await loadCompanies();

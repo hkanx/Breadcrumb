@@ -40,16 +40,11 @@
 
   const SECTION_HINTS = [
     "about the role",
-    "about this role",
     "job description",
     "responsibilities",
     "what you'll do",
-    "what you will do",
     "requirements",
     "qualifications",
-    "minimum qualifications",
-    "preferred qualifications",
-    "nice to have",
     "benefits",
     "compensation",
     "salary"
@@ -77,7 +72,7 @@
       root.querySelectorAll(selector).forEach((node) => node.remove());
     });
 
-    root.querySelectorAll("*" ).forEach((node) => {
+    root.querySelectorAll("*").forEach((node) => {
       const className = (node.className || "").toString().toLowerCase();
       const id = (node.id || "").toLowerCase();
       const hasNoisyName = /(cookie|consent|subscribe|share|social|modal|dialog|recommend|similar)/.test(`${className} ${id}`);
@@ -90,21 +85,22 @@
   function nodeScore(node) {
     const text = normalizeLines(node.innerText || node.textContent || "");
     if (!text) {
-      return 0;
+      return { score: 0, sectionHits: 0 };
     }
 
     let score = Math.min(text.length, 5000) / 50;
 
     const nameBlob = `${(node.tagName || "").toLowerCase()} ${(node.className || "").toString().toLowerCase()} ${(node.id || "").toLowerCase()}`;
-
     if (/job|description|posting|detail|content|role/.test(nameBlob)) {
       score += 40;
     }
 
     const lowerText = text.toLowerCase();
+    let sectionHits = 0;
     SECTION_HINTS.forEach((hint) => {
       if (lowerText.includes(hint)) {
         score += 15;
+        sectionHits += 1;
       }
     });
 
@@ -113,7 +109,7 @@
     score += headingCount * 2;
     score += Math.min(listCount, 40) * 0.8;
 
-    return score;
+    return { score, sectionHits };
   }
 
   function getCandidates() {
@@ -148,6 +144,26 @@
     return result;
   }
 
+  function scoreConfidence({ extractedLength, sectionHits, candidateCount, topScore }) {
+    let confidence = 0;
+
+    if (extractedLength >= 500) {
+      confidence += 0.3;
+    }
+    if (extractedLength >= 1500) {
+      confidence += 0.2;
+    }
+
+    confidence += Math.min(sectionHits * 0.08, 0.24);
+    confidence += Math.min(candidateCount * 0.04, 0.16);
+
+    if (topScore > 120) {
+      confidence += 0.1;
+    }
+
+    return Math.min(1, Number(confidence.toFixed(2)));
+  }
+
   function extractCleanText() {
     const candidates = getCandidates();
 
@@ -156,32 +172,59 @@
         const clone = node.cloneNode(true);
         removeNoise(clone);
         const text = normalizeLines(clone.innerText || clone.textContent || "");
+        const scoring = nodeScore(clone);
         return {
           text,
-          score: nodeScore(clone)
+          score: scoring.score,
+          sectionHits: scoring.sectionHits
         };
       })
       .filter((item) => item.text.length > 200)
       .sort((a, b) => b.score - a.score)
       .slice(0, 4);
 
-    const merged = uniqueByText(scoredBlocks.map((item) => item.text))
-      .join("\n\n")
-      .trim();
+    const mergedBlocks = uniqueByText(scoredBlocks.map((item) => item.text));
+    const mergedText = mergedBlocks.join("\n\n").trim();
 
-    if (merged.length >= 300) {
-      return merged;
+    if (mergedText.length >= 300) {
+      const sectionHits = scoredBlocks.reduce((sum, item) => sum + item.sectionHits, 0);
+      return {
+        text: mergedText,
+        confidence: scoreConfidence({
+          extractedLength: mergedText.length,
+          sectionHits,
+          candidateCount: candidates.length,
+          topScore: scoredBlocks[0]?.score || 0
+        }),
+        sectionHits
+      };
     }
 
     const bodyClone = document.body.cloneNode(true);
     removeNoise(bodyClone);
-    return normalizeLines(bodyClone.innerText || bodyClone.textContent || "");
+    const fallbackText = normalizeLines(bodyClone.innerText || bodyClone.textContent || "");
+
+    return {
+      text: fallbackText,
+      confidence: scoreConfidence({
+        extractedLength: fallbackText.length,
+        sectionHits: 0,
+        candidateCount: candidates.length,
+        topScore: 0
+      }),
+      sectionHits: 0
+    };
   }
 
   function scrapeJobPage() {
+    const extracted = extractCleanText();
+
     return {
       title: document.title || "Untitled Page",
-      cleanedText: extractCleanText()
+      cleanedText: extracted.text,
+      confidence: extracted.confidence,
+      sectionHints: SECTION_HINTS.filter((hint) => extracted.text.toLowerCase().includes(hint)),
+      url: window.location.href
     };
   }
 
@@ -194,10 +237,7 @@
       const result = scrapeJobPage();
       sendResponse({ ok: true, data: result });
     } catch (error) {
-      sendResponse({
-        ok: false,
-        error: error instanceof Error ? error.message : "Unknown scrape error"
-      });
+      sendResponse({ ok: false, error: error instanceof Error ? error.message : "Unknown scrape error" });
     }
 
     return true;
