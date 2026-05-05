@@ -1,0 +1,32 @@
+{
+  "manifest_version": 3,
+  "name": "Breadcrumb",
+  "version": "0.1.0",
+  "description": "A Chrome extension scaffold for Breadcrumb.",
+  "permissions": [
+    "activeTab",
+    "scripting",
+    "storage",
+    "sidePanel"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_title": "Breadcrumb",
+    "default_popup": "popup.html"
+  },
+  "side_panel": {
+    "default_path": "options.html"
+  },
+  "commands": {
+    "trigger-action": {
+      "suggested_key": {
+        "default": "Ctrl+Shift+S",
+        "mac": "Command+Shift+S"
+      },
+      "description": "Trigger Breadcrumb action"
+    }
+  },
+  "options_page": "options.html"
+}

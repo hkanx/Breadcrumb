@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Breadcrumb Vault</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body class="options-body">
+    <main class="vault-layout">
+      <aside class="vault-sidebar panel">
+        <header class="panel-header compact">
+          <p class="eyebrow">Vault</p>
+          <h1>Breadcrumb Vault 🍞 🐈‍</h1>
+        </header>
+        <div class="search-block">
+          <input id="global-search" class="search-input" type="search" placeholder="Search company, position, URL, note, or text" />
+          <div class="quick-filters" role="group" aria-label="Quick filters">
+            <button type="button" class="btn-filter active" data-mode="company">Company</button>
+            <button type="button" class="btn-filter" data-mode="position">Position</button>
+            <button type="button" class="btn-filter" data-mode="recent">Recent</button>
+          </div>
+        </div>
+        <nav id="company-list" class="company-list" aria-label="Company list"></nav>
+      </aside>
+
+      <section class="vault-main panel">
+        <header class="panel-header compact">
+          <p class="eyebrow">Details</p>
+          <h2 id="company-title">Select a company</h2>
+        </header>
+        <section class="velocity-card" aria-label="Daily application velocity">
+          <div class="velocity-header">
+            <p class="eyebrow">Velocity</p>
+            <p id="velocity-summary" class="velocity-summary">Loading...</p>
+          </div>
+          <div id="velocity-chart" class="velocity-chart"></div>
+        </section>
+        <div id="positions-view" class="positions-view"></div>
+      </section>
+    </main>
+
+    <script src="storage.js"></script>
+    <script src="options.js"></script>
+  </body>
+</html>

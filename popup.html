@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Breadcrumb Capture</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body class="popup-body">
+    <main class="panel popup-panel">
+      <header class="panel-header">
+        <p class="eyebrow">Breadcrumb</p>
+        <h1>Capture Scrap</h1>
+      </header>
+
+      <form id="capture-form" class="capture-form">
+        <label class="field-label" for="company">Company</label>
+        <input id="company" name="company" type="text" required />
+
+        <label class="field-label" for="position">Position</label>
+        <input id="position" name="position" type="text" placeholder="Software Engineer" required />
+
+        <label class="field-label" for="note">Note (optional)</label>
+        <textarea id="note" name="note" rows="3" placeholder="Add context for this snapshot"></textarea>
+
+        <button type="submit" id="capture-button" class="btn-primary">Capture</button>
+        <button type="button" id="open-side-panel" class="btn-secondary">Open Vault Side Panel</button>
+      </form>
+
+      <section class="preview-card" aria-label="Scrape preview">
+        <p class="eyebrow">Scrape Preview</p>
+        <p id="preview-meta" class="scrap-meta">Waiting for page scrape...</p>
+        <p id="preview-title" class="preview-title"></p>
+        <p id="preview-text" class="scrap-text"></p>
+      </section>
+
+      <p id="status" class="status" role="status" aria-live="polite"></p>
+    </main>
+
+    <script src="storage.js"></script>
+    <script src="popup.js"></script>
+  </body>
+</html>
