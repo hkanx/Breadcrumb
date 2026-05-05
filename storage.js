@@ -3,6 +3,7 @@ class BreadcrumbStorage {
     this.dbName = dbName;
     this.version = version;
     this.storeName = "companies";
+    this.schemaVersion = 2;
     this.dbPromise = null;
   }
 
@@ -37,26 +38,6 @@ class BreadcrumbStorage {
     });
   }
 
-  normalizeScrapInput(content) {
-    if (typeof content === "string") {
-      return { rawText: content.trim(), note: undefined, url: window.location.href };
-    }
-
-    if (!content || typeof content !== "object") {
-      throw new Error("Scrap content must be a string or an object.");
-    }
-
-    if (typeof content.rawText !== "string" || !content.rawText.trim()) {
-      throw new Error("Scrap content requires a non-empty rawText string.");
-    }
-
-    return {
-      rawText: content.rawText.trim(),
-      note: typeof content.note === "string" && content.note.trim() ? content.note.trim() : undefined,
-      url: typeof content.url === "string" && content.url.trim() ? content.url.trim() : window.location.href
-    };
-  }
-
   isValidUrl(url) {
     if (!url) {
       return true;
@@ -69,6 +50,130 @@ class BreadcrumbStorage {
     }
   }
 
+  toLocalDayKey(dateInput) {
+    const date = new Date(dateInput);
+    if (Number.isNaN(date.getTime())) {
+      const now = new Date();
+      return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
+    }
+
+    return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+  }
+
+  normalizeTags(tags) {
+    if (!Array.isArray(tags)) {
+      return [];
+    }
+
+    const seen = new Set();
+    return tags
+      .map((item) => String(item || "").trim().toLowerCase())
+      .filter((item) => item.length > 0)
+      .filter((item) => {
+        if (seen.has(item)) {
+          return false;
+        }
+        seen.add(item);
+        return true;
+      });
+  }
+
+  normalizeScrap(scrap) {
+    return {
+      timestamp: scrap.timestamp || new Date().toISOString(),
+      url: typeof scrap.url === "string" ? scrap.url : "",
+      rawText: typeof scrap.rawText === "string" ? scrap.rawText : "",
+      note: typeof scrap.note === "string" ? scrap.note : undefined,
+      lastEditedAt: scrap.lastEditedAt || undefined,
+      status: scrap.status || "saved",
+      tags: this.normalizeTags(scrap.tags || []),
+      favorite: Boolean(scrap.favorite),
+      confidence: typeof scrap.confidence === "number" ? scrap.confidence : undefined,
+      captureSource: scrap.captureSource || "manual",
+      schemaVersion: this.schemaVersion,
+      captureCount: Number.isInteger(scrap.captureCount) && scrap.captureCount > 0 ? scrap.captureCount : 1
+    };
+  }
+
+  normalizeScrapInput(content) {
+    if (typeof content === "string") {
+      return {
+        rawText: content.trim(),
+        note: undefined,
+        url: window.location.href,
+        status: "saved",
+        tags: [],
+        favorite: false,
+        confidence: undefined,
+        captureSource: "manual"
+      };
+    }
+
+    if (!content || typeof content !== "object") {
+      throw new Error("Scrap content must be a string or an object.");
+    }
+
+    if (typeof content.rawText !== "string" || !content.rawText.trim()) {
+      throw new Error("Scrap content requires a non-empty rawText string.");
+    }
+
+    const normalizedUrl = typeof content.url === "string" && content.url.trim() ? content.url.trim() : window.location.href;
+    if (!this.isValidUrl(normalizedUrl)) {
+      throw new Error("Invalid URL in scrap content.");
+    }
+
+    return {
+      rawText: content.rawText.trim(),
+      note: typeof content.note === "string" && content.note.trim() ? content.note.trim() : undefined,
+      url: normalizedUrl,
+      status: content.status || "saved",
+      tags: this.normalizeTags(content.tags || []),
+      favorite: Boolean(content.favorite),
+      confidence: typeof content.confidence === "number" ? content.confidence : undefined,
+      captureSource: content.captureSource || "manual"
+    };
+  }
+
+  ensureCompanyRecord(companyRecord, companyName) {
+    const record = companyRecord || { name: companyName, positions: [] };
+    if (!Array.isArray(record.positions)) {
+      record.positions = [];
+    }
+    return record;
+  }
+
+  ensurePosition(companyRecord, positionName) {
+    let position = companyRecord.positions.find((item) => item.name === positionName);
+    if (!position) {
+      position = { name: positionName, scraps: [] };
+      companyRecord.positions.push(position);
+    }
+
+    if (!Array.isArray(position.scraps)) {
+      position.scraps = [];
+    }
+
+    return position;
+  }
+
+  normalizeUrlForDedup(url) {
+    if (!url) {
+      return "";
+    }
+
+    try {
+      const parsed = new URL(url);
+      parsed.hash = "";
+      return parsed.toString();
+    } catch (_error) {
+      return String(url).trim().toLowerCase();
+    }
+  }
+
+  dedupKey({ url, timestamp, position }) {
+    return `${this.normalizeUrlForDedup(url)}|${this.toLocalDayKey(timestamp)}|${String(position || "").trim().toLowerCase()}`;
+  }
+
   removeEmptyPositions(companyRecord) {
     companyRecord.positions = (companyRecord.positions || []).filter(
       (position) => Array.isArray(position.scraps) && position.scraps.length > 0
@@ -76,6 +181,10 @@ class BreadcrumbStorage {
   }
 
   async saveScrap(company, position, content) {
+    return this.saveScrapWithPolicy(company, position, content, { dedup: false });
+  }
+
+  async saveScrapWithPolicy(company, position, content, options = {}) {
     if (typeof company !== "string" || !company.trim()) {
       throw new Error("Company must be a non-empty string.");
     }
@@ -87,14 +196,21 @@ class BreadcrumbStorage {
     const positionName = position.trim();
     const normalizedContent = this.normalizeScrapInput(content);
 
-    const scrap = {
+    const scrap = this.normalizeScrap({
       timestamp: new Date().toISOString(),
       url: normalizedContent.url,
       rawText: normalizedContent.rawText,
-      ...(normalizedContent.note ? { note: normalizedContent.note } : {})
-    };
+      note: normalizedContent.note,
+      status: normalizedContent.status,
+      tags: normalizedContent.tags,
+      favorite: normalizedContent.favorite,
+      confidence: normalizedContent.confidence,
+      captureSource: normalizedContent.captureSource,
+      captureCount: 1
+    });
 
     const db = await this.open();
+    let outcome = "created";
 
     await new Promise((resolve, reject) => {
       const transaction = db.transaction(this.storeName, "readwrite");
@@ -102,20 +218,42 @@ class BreadcrumbStorage {
       const getRequest = store.get(companyName);
 
       getRequest.onsuccess = () => {
-        const companyRecord = getRequest.result || { name: companyName, positions: [] };
+        const companyRecord = this.ensureCompanyRecord(getRequest.result, companyName);
+        const targetPosition = this.ensurePosition(companyRecord, positionName);
 
-        if (!Array.isArray(companyRecord.positions)) {
-          companyRecord.positions = [];
-        }
+        if (options.dedup) {
+          const targetKey = this.dedupKey({
+            url: scrap.url,
+            timestamp: scrap.timestamp,
+            position: positionName
+          });
 
-        let targetPosition = companyRecord.positions.find((item) => item.name === positionName);
-        if (!targetPosition) {
-          targetPosition = { name: positionName, scraps: [] };
-          companyRecord.positions.push(targetPosition);
-        }
+          const existing = targetPosition.scraps.find((item) => {
+            const normalized = this.normalizeScrap(item);
+            const existingKey = this.dedupKey({
+              url: normalized.url,
+              timestamp: normalized.timestamp,
+              position: positionName
+            });
+            return existingKey === targetKey;
+          });
 
-        if (!Array.isArray(targetPosition.scraps)) {
-          targetPosition.scraps = [];
+          if (existing) {
+            const existingNorm = this.normalizeScrap(existing);
+            existing.rawText = scrap.rawText;
+            existing.url = scrap.url;
+            existing.note = scrap.note || existingNorm.note;
+            existing.status = existingNorm.status || "saved";
+            existing.tags = this.normalizeTags([...(existingNorm.tags || []), ...(scrap.tags || [])]);
+            existing.favorite = existingNorm.favorite;
+            existing.confidence = scrap.confidence;
+            existing.captureSource = scrap.captureSource;
+            existing.captureCount = (existingNorm.captureCount || 1) + 1;
+            existing.lastEditedAt = new Date().toISOString();
+            outcome = "merged";
+            store.put(companyRecord);
+            return;
+          }
         }
 
         targetPosition.scraps.push(scrap);
@@ -128,7 +266,7 @@ class BreadcrumbStorage {
       transaction.onabort = () => reject(new Error(`IndexedDB transaction aborted: ${transaction.error?.message || "Unknown error"}`));
     });
 
-    return scrap;
+    return { scrap, outcome };
   }
 
   async updateScrap(companyName, positionName, scrapTimestamp, patch) {
@@ -169,19 +307,15 @@ class BreadcrumbStorage {
           return;
         }
 
-        if (patch.rawText !== undefined) {
-          scrap.rawText = patch.rawText.trim();
-        }
-
-        if (patch.note !== undefined) {
-          scrap.note = typeof patch.note === "string" && patch.note.trim() ? patch.note.trim() : undefined;
-        }
-
-        if (patch.url !== undefined) {
-          scrap.url = patch.url ? patch.url.trim() : "";
-        }
-
+        const normalized = this.normalizeScrap(scrap);
+        scrap.rawText = patch.rawText !== undefined ? patch.rawText.trim() : normalized.rawText;
+        scrap.note = patch.note !== undefined ? (typeof patch.note === "string" && patch.note.trim() ? patch.note.trim() : undefined) : normalized.note;
+        scrap.url = patch.url !== undefined ? (patch.url ? patch.url.trim() : "") : normalized.url;
+        scrap.status = patch.status !== undefined ? patch.status : normalized.status;
+        scrap.favorite = patch.favorite !== undefined ? Boolean(patch.favorite) : normalized.favorite;
+        scrap.tags = patch.tags !== undefined ? this.normalizeTags(patch.tags) : normalized.tags;
         scrap.lastEditedAt = new Date().toISOString();
+        scrap.schemaVersion = this.schemaVersion;
         store.put(company);
         updated = true;
       };
@@ -191,6 +325,18 @@ class BreadcrumbStorage {
       tx.onerror = () => reject(new Error(`IndexedDB transaction failed: ${tx.error?.message || "Unknown error"}`));
       tx.onabort = () => reject(new Error(`IndexedDB transaction aborted: ${tx.error?.message || "Unknown error"}`));
     });
+  }
+
+  async setScrapStatus(companyName, positionName, scrapTimestamp, status) {
+    return this.updateScrap(companyName, positionName, scrapTimestamp, { status });
+  }
+
+  async setScrapTags(companyName, positionName, scrapTimestamp, tags) {
+    return this.updateScrap(companyName, positionName, scrapTimestamp, { tags });
+  }
+
+  async toggleScrapFavorite(companyName, positionName, scrapTimestamp, favorite) {
+    return this.updateScrap(companyName, positionName, scrapTimestamp, { favorite });
   }
 
   async moveScrapToPosition(companyName, fromPositionName, toPositionName, scrapTimestamp, targetCompanyName) {
@@ -245,7 +391,7 @@ class BreadcrumbStorage {
             destinationPosition.scraps = [];
           }
 
-          destinationPosition.scraps.push({ ...scrap, lastEditedAt: new Date().toISOString() });
+          destinationPosition.scraps.push({ ...this.normalizeScrap(scrap), lastEditedAt: new Date().toISOString() });
         };
 
         if (destinationCompanyName === sourceCompanyName) {
@@ -270,9 +416,7 @@ class BreadcrumbStorage {
           moved = true;
         };
 
-        destinationRequest.onerror = () => {
-          reject(new Error(`Failed to load destination company: ${destinationRequest.error?.message || "Unknown error"}`));
-        };
+        destinationRequest.onerror = () => reject(new Error(`Failed to load destination company: ${destinationRequest.error?.message || "Unknown error"}`));
       };
 
       sourceRequest.onerror = () => reject(new Error(`Failed to load source company: ${sourceRequest.error?.message || "Unknown error"}`));
@@ -331,38 +475,26 @@ class BreadcrumbStorage {
     const store = transaction.objectStore(this.storeName);
     const companies = await this.requestToPromise(store.getAll());
 
-    return (Array.isArray(companies) ? companies : []).sort((a, b) =>
-      a.name.localeCompare(b.name, undefined, { sensitivity: "base" })
-    );
+    return (Array.isArray(companies) ? companies : [])
+      .map((company) => ({
+        ...company,
+        positions: (company.positions || []).map((position) => ({
+          ...position,
+          scraps: (position.scraps || []).map((scrap) => this.normalizeScrap(scrap))
+        }))
+      }))
+      .sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: "base" }));
   }
 
   async getDailyApplicationVelocity(days = 14) {
     const windowDays = Number.isInteger(days) && days > 0 ? days : 14;
     const companies = await this.getAlphabeticalCompanies();
     const countsByDay = new Map();
-    const toLocalDayKey = (date) => {
-      const y = date.getFullYear();
-      const m = String(date.getMonth() + 1).padStart(2, "0");
-      const d = String(date.getDate()).padStart(2, "0");
-      return `${y}-${m}-${d}`;
-    };
 
     companies.forEach((company) => {
       (company.positions || []).forEach((position) => {
         (position.scraps || []).forEach((scrap) => {
-          if (!scrap?.timestamp) {
-            return;
-          }
-
-          const date = new Date(scrap.timestamp);
-          if (Number.isNaN(date.getTime())) {
-            // Keep legacy or malformed entries visible in analytics by counting them today.
-            const todayKey = toLocalDayKey(new Date());
-            countsByDay.set(todayKey, (countsByDay.get(todayKey) || 0) + 1);
-            return;
-          }
-
-          const dayKey = toLocalDayKey(date);
+          const dayKey = this.toLocalDayKey(scrap.timestamp);
           countsByDay.set(dayKey, (countsByDay.get(dayKey) || 0) + 1);
         });
       });
@@ -375,11 +507,55 @@ class BreadcrumbStorage {
     for (let offset = windowDays - 1; offset >= 0; offset -= 1) {
       const day = new Date(now);
       day.setDate(now.getDate() - offset);
-      const dayKey = toLocalDayKey(day);
+      const dayKey = this.toLocalDayKey(day);
       result.push({ date: dayKey, count: countsByDay.get(dayKey) || 0 });
     }
 
     return result;
+  }
+
+  async exportVaultJson() {
+    const companies = await this.getAlphabeticalCompanies();
+    return {
+      schemaVersion: this.schemaVersion,
+      exportedAt: new Date().toISOString(),
+      companies
+    };
+  }
+
+  async importVaultJson(payload) {
+    if (!payload || typeof payload !== "object" || !Array.isArray(payload.companies)) {
+      throw new Error("Invalid import payload.");
+    }
+
+    const db = await this.open();
+
+    await new Promise((resolve, reject) => {
+      const tx = db.transaction(this.storeName, "readwrite");
+      const store = tx.objectStore(this.storeName);
+
+      payload.companies.forEach((company) => {
+        if (!company?.name) {
+          return;
+        }
+
+        const normalizedCompany = {
+          name: String(company.name),
+          positions: (company.positions || []).map((position) => ({
+            name: String(position.name || "Untitled Position"),
+            scraps: (position.scraps || []).map((scrap) => this.normalizeScrap(scrap))
+          }))
+        };
+
+        store.put(normalizedCompany);
+      });
+
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(new Error(`Import transaction failed: ${tx.error?.message || "Unknown error"}`));
+      tx.onabort = () => reject(new Error(`Import transaction aborted: ${tx.error?.message || "Unknown error"}`));
+    });
+
+    return true;
   }
 
   async deleteCompany(name) {

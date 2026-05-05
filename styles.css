@@ -335,3 +335,26 @@ textarea:focus,
     min-height: auto;
   }
 }
+
+.toolbar-card {
+  margin-top: 10px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: #0a1525;
+  padding: 10px;
+  display: grid;
+  gap: 8px;
+}
+
+.file-btn {
+  display: inline-flex;
+  align-items: center;
+}
+
+select {
+  background: #091120;
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 6px 8px;
+}

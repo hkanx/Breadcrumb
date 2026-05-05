@@ -11,14 +11,19 @@
       <aside class="vault-sidebar panel">
         <header class="panel-header compact">
           <p class="eyebrow">Vault</p>
-          <h1>Breadcrumb Vault 🍞 🐈‍</h1>
+          <h1>Breadcrumb Vault</h1>
         </header>
         <div class="search-block">
-          <input id="global-search" class="search-input" type="search" placeholder="Search company, position, URL, note, or text" />
+          <input id="global-search" class="search-input" type="search" placeholder="Search company, position, URL, note, text, status, tags" />
           <div class="quick-filters" role="group" aria-label="Quick filters">
             <button type="button" class="btn-filter active" data-mode="company">Company</button>
             <button type="button" class="btn-filter" data-mode="position">Position</button>
             <button type="button" class="btn-filter" data-mode="recent">Recent</button>
+          </div>
+          <div class="quick-filters" role="group" aria-label="Meta filters">
+            <button type="button" class="btn-filter active" data-meta="all">All</button>
+            <button type="button" class="btn-filter" data-meta="favorite">Favorites</button>
+            <button type="button" class="btn-filter" data-meta="applied">Applied+</button>
           </div>
         </div>
         <nav id="company-list" class="company-list" aria-label="Company list"></nav>
@@ -29,6 +34,21 @@
           <p class="eyebrow">Details</p>
           <h2 id="company-title">Select a company</h2>
         </header>
+
+        <section class="toolbar-card">
+          <div class="position-actions">
+            <button id="bulk-favorite" class="btn-secondary" type="button">Bulk Favorite Visible</button>
+            <button id="bulk-status-applied" class="btn-secondary" type="button">Bulk Set Applied</button>
+            <button id="bulk-tag-core" class="btn-secondary" type="button">Bulk Add Tag: core</button>
+            <button id="bulk-export" class="btn-secondary" type="button">Bulk Export Markdown</button>
+          </div>
+          <div class="position-actions">
+            <button id="export-json" class="btn-secondary" type="button">Export Vault JSON</button>
+            <label class="btn-secondary file-btn" for="import-json">Import Vault JSON</label>
+            <input id="import-json" type="file" accept="application/json" hidden />
+          </div>
+        </section>
+
         <section class="velocity-card" aria-label="Daily application velocity">
           <div class="velocity-header">
             <p class="eyebrow">Velocity</p>
@@ -36,6 +56,15 @@
           </div>
           <div id="velocity-chart" class="velocity-chart"></div>
         </section>
+
+        <section class="velocity-card" aria-label="Diagnostics">
+          <div class="velocity-header">
+            <p class="eyebrow">Diagnostics</p>
+            <p id="diagnostic-summary" class="velocity-summary">Loading...</p>
+          </div>
+          <p id="diagnostic-text" class="scrap-text"></p>
+        </section>
+
         <div id="positions-view" class="positions-view"></div>
       </section>
     </main>

@@ -18,10 +18,11 @@ function renderPreview(data) {
 
   const previewText = (data.cleanedText || "").trim();
   const urlText = data.url ? ` | ${data.url}` : "";
+  const confidenceText = typeof data.confidence === "number" ? ` | confidence ${(data.confidence * 100).toFixed(0)}%` : "";
 
   titleEl.textContent = data.title || "Untitled Page";
   textEl.textContent = previewText || "(No text extracted from this page yet.)";
-  metaEl.textContent = `${previewText.length} chars${urlText}`;
+  metaEl.textContent = `${previewText.length} chars${confidenceText}${urlText}`;
   textEl.scrollTop = 0;
 }
 
@@ -33,7 +34,7 @@ function guessCompanyFromTitle(title) {
     .filter(Boolean);
 
   if (!parts.length) {
-    return source.trim() || "";
+    return source.trim() || "Unknown Company";
   }
 
   const likelyCompany = parts.length > 1 ? parts[parts.length - 1] : parts[0];
@@ -43,7 +44,7 @@ function guessCompanyFromTitle(title) {
 function guessPositionFromTitle(title) {
   const source = (title || "").trim();
   if (!source) {
-    return "";
+    return "General Role";
   }
 
   const separators = [" | ", " - ", " @ ", " at ", ":"];
@@ -77,7 +78,22 @@ async function getCaptureFromBackground(reason = "popup") {
 async function refreshLastStatus() {
   try {
     const response = await chrome.runtime.sendMessage({ type: "GET_LAST_CAPTURE_STATUS" });
-    if (!response?.ok || !response.status) {
+    if (!response?.ok) {
+      return;
+    }
+
+    if (response.draft?.company) {
+      document.getElementById("company").value = response.draft.company;
+      if (!document.getElementById("position").value.trim()) {
+        document.getElementById("position").value = response.draft.position || "";
+      }
+      renderPreview(response.draft);
+      setStatus("Low-confidence shortcut capture loaded for review.", "error");
+      await chrome.runtime.sendMessage({ type: "CLEAR_LAST_AUTO_CAPTURE_DRAFT" });
+      return;
+    }
+
+    if (!response.status) {
       return;
     }
 
@@ -115,6 +131,7 @@ async function autofillCompany() {
     renderPreview({
       title: fallbackTab?.title || "Untitled Page",
       cleanedText: "",
+      confidence: 0,
       url: fallbackTab?.url || ""
     });
   }
@@ -141,16 +158,18 @@ async function handleCapture(event) {
     const scraped = await getCaptureFromBackground("popup_capture");
     renderPreview(scraped);
 
-    await window.BreadcrumbStorage.saveScrap(company, position, {
+    const saveResult = await window.BreadcrumbStorage.saveScrapWithPolicy(company, position, {
       rawText: scraped.cleanedText,
       url: scraped.url || window.location.href,
-      note: note || undefined
-    });
+      note: note || undefined,
+      confidence: scraped.confidence,
+      captureSource: "popup_manual"
+    }, { dedup: true });
 
-    // Notify any open vault/side-panel views to refresh immediately.
     chrome.runtime.sendMessage({ type: "VAULT_DATA_CHANGED", reason: "save_scrap" }).catch(() => {});
 
-    setStatus("Captured and saved to vault.", "success");
+    const confidenceText = typeof scraped.confidence === "number" ? ` (${(scraped.confidence * 100).toFixed(0)}% confidence)` : "";
+    setStatus(`Captured and ${saveResult.outcome === "merged" ? "merged" : "saved"} to vault${confidenceText}.`, "success");
   } catch (error) {
     setStatus(error instanceof Error ? error.message : "Capture failed.", "error");
   } finally {
@@ -165,12 +184,7 @@ async function openVaultSidePanel() {
       throw new Error("No active tab to attach side panel.");
     }
 
-    await chrome.sidePanel.setOptions({
-      tabId: tab.id,
-      path: "options.html",
-      enabled: true
-    });
-
+    await chrome.sidePanel.setOptions({ tabId: tab.id, path: "options.html", enabled: true });
     await chrome.sidePanel.open({ tabId: tab.id });
     setStatus("Vault opened in side panel.", "success");
   } catch (error) {
