@@ -1,4 +1,5 @@
 const SCRAP_STATUS = ["saved", "applied", "interviewing", "offer", "rejected"];
+const THEME_KEY = "breadcrumb-vault-theme";
 
 const state = {
   companies: [],
@@ -22,6 +23,21 @@ function formatDate(isoDate) {
     return isoDate;
   }
   return parsed.toLocaleString();
+}
+
+function applyTheme(theme) {
+  const body = document.body;
+  body.classList.remove("theme-light", "theme-night");
+  body.classList.add(theme === "night" ? "theme-night" : "theme-light");
+
+  const toggle = document.getElementById("theme-toggle");
+  if (toggle) {
+    toggle.textContent = theme === "night" ? "Light Mode" : "Night Mode";
+  }
+
+  document.querySelectorAll(".theme-cat").forEach((img) => {
+    img.src = "assets/pixel/cat-universal-32.png";
+  });
 }
 
 function escapeMarkdown(text) {
@@ -223,11 +239,29 @@ function renderVelocityChart() {
   summary.textContent = `${total} scraps in ${points.length} days (${avg}/day)`;
 
   points.forEach((point) => {
-    const bar = document.createElement("div");
-    bar.className = "velocity-bar";
-    bar.style.height = `${Math.max(8, Math.round((point.count / maxCount) * 56))}px`;
-    bar.title = `${point.date}: ${point.count} scrap${point.count === 1 ? "" : "s"}`;
-    chart.append(bar);
+    const day = document.createElement("div");
+    day.className = "velocity-day";
+    day.title = `${point.date}: ${point.count} scrap${point.count === 1 ? "" : "s"}`;
+
+    const visibleToasts = Math.min(point.count, 6);
+    for (let i = 0; i < visibleToasts; i += 1) {
+      const toast = document.createElement("img");
+      toast.className = "velocity-toast";
+      toast.src = "assets/pixel/toast-24.png";
+      toast.alt = "";
+      toast.width = 10;
+      toast.height = 10;
+      day.append(toast);
+    }
+
+    if (point.count > visibleToasts) {
+      const overflow = document.createElement("span");
+      overflow.className = "velocity-overflow";
+      overflow.textContent = `+${point.count - visibleToasts}`;
+      day.append(overflow);
+    }
+
+    chart.append(day);
   });
 }
 
@@ -736,6 +770,24 @@ function wireToolbarActions() {
 }
 
 document.addEventListener("DOMContentLoaded", async () => {
+  const savedTheme = localStorage.getItem(THEME_KEY) || "light";
+  applyTheme(savedTheme);
+
+  const themeToggle = document.getElementById("theme-toggle");
+  if (themeToggle) {
+    themeToggle.addEventListener("click", () => {
+      const currentNight = document.body.classList.contains("theme-night");
+      const next = currentNight ? "light" : "night";
+      localStorage.setItem(THEME_KEY, next);
+      applyTheme(next);
+    });
+  }
+
+  const cozyStrip = document.getElementById("cozy-strip");
+  if (cozyStrip) {
+    requestAnimationFrame(() => cozyStrip.classList.add("ready"));
+  }
+
   const searchInput = document.getElementById("global-search");
 
   searchInput.addEventListener("input", (event) => {

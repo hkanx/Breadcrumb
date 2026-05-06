@@ -12,10 +12,38 @@
       <aside class="vault-sidebar panel">
         <header class="panel-header compact">
           <p class="eyebrow">Vault</p>
-          <h1>Breadcrumb Vault</h1>
+          <div class="vault-title-row">
+            <h1>Breadcrumb Vault <img class="pixel-inline title-toast" src="assets/pixel/toast-24.png" alt="" width="16" height="16" /></h1>
+            <div class="title-actions">
+              <button id="theme-toggle" class="btn-secondary theme-toggle" type="button">Night Mode</button>
+              <img class="pixel-sprite vault-pet-cat cat-sprite theme-cat" src="assets/pixel/cat-universal-32.png" alt="Cozy vault cat mascot" width="32" height="32" />
+            </div>
+          </div>
+          <div class="pixel-cluster" aria-hidden="true">
+            <img class="pixel-sprite crumb-float" src="assets/pixel/crumb-10.png" alt="" width="10" height="10" />
+            <img class="pixel-sprite star-float" src="assets/pixel/star-10.png" alt="" width="10" height="10" />
+            <img class="pixel-sprite heart-float" src="assets/pixel/heart-10.png" alt="" width="10" height="10" />
+          </div>
         </header>
         <div class="search-block">
           <input id="global-search" class="search-input" type="search" placeholder="Search company, position, URL, note, text, status, tags" />
+          <section id="cozy-strip" class="cozy-strip" aria-label="Cozy cafe pixel decor">
+            <div class="cozy-main">
+              <div class="cozy-food">
+                <img class="pixel-sprite toast-sprite" src="assets/pixel/toast-24.png" alt="Pixel butter toast" width="24" height="24" />
+                <div class="latte-wrap">
+                  <img class="pixel-sprite latte-sprite" src="assets/pixel/latte-24.png" alt="Pixel vanilla latte" width="24" height="24" />
+                  <span class="steam steam-a" aria-hidden="true"></span>
+                  <span class="steam steam-b" aria-hidden="true"></span>
+                </div>
+              </div>
+            </div>
+            <div class="cozy-decor" aria-hidden="true">
+              <img class="pixel-sprite crumb-float" src="assets/pixel/crumb-10.png" alt="" width="10" height="10" />
+              <img class="pixel-sprite star-float" src="assets/pixel/star-10.png" alt="" width="10" height="10" />
+              <img class="pixel-sprite heart-float" src="assets/pixel/heart-10.png" alt="" width="10" height="10" />
+            </div>
+          </section>
           <div class="quick-filters" role="group" aria-label="Quick filters">
             <button type="button" class="btn-filter active" data-mode="company">Company</button>
             <button type="button" class="btn-filter" data-mode="position">Position</button>
@@ -33,7 +61,7 @@
       <section class="vault-main panel">
         <header class="panel-header compact">
           <p class="eyebrow">Details</p>
-          <h2 id="company-title">Select a company</h2>
+          <h2 id="company-title">Select a company <img class="pixel-inline title-latte" src="assets/pixel/latte-24.png" alt="" width="16" height="16" /></h2>
         </header>
 
         <section class="toolbar-card">
@@ -56,6 +84,10 @@
             <p id="velocity-summary" class="velocity-summary">Loading...</p>
           </div>
           <div id="velocity-chart" class="velocity-chart"></div>
+          <div class="pixel-cluster cluster-bottom" aria-hidden="true">
+            <img class="pixel-sprite crumb-float" src="assets/pixel/crumb-10.png" alt="" width="10" height="10" />
+            <img class="pixel-sprite star-float" src="assets/pixel/star-10.png" alt="" width="10" height="10" />
+          </div>
         </section>
 
         <section class="velocity-card" aria-label="Diagnostics">
