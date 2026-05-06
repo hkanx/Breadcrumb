@@ -134,6 +134,13 @@ body {
   font-size: 1.1rem;
 }
 
+.vault-main .panel-header.compact {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
 .eyebrow {
   margin: 0 0 4px;
   color: var(--muted);
