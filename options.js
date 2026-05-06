@@ -233,7 +233,6 @@ function renderVelocityChart() {
     return;
   }
 
-  const maxCount = Math.max(...points.map((item) => item.count), 1);
   const total = points.reduce((sum, item) => sum + item.count, 0);
   const avg = (total / points.length).toFixed(2);
   summary.textContent = `${total} scraps in ${points.length} days (${avg}/day)`;
@@ -243,22 +242,27 @@ function renderVelocityChart() {
     day.className = "velocity-day";
     day.title = `${point.date}: ${point.count} scrap${point.count === 1 ? "" : "s"}`;
 
-    const visibleToasts = Math.min(point.count, 6);
-    for (let i = 0; i < visibleToasts; i += 1) {
+    const latteCount = Math.floor(point.count / 5);
+    const toastCount = point.count % 5;
+
+    for (let i = 0; i < latteCount; i += 1) {
+      const latte = document.createElement("img");
+      latte.className = "velocity-latte";
+      latte.src = "assets/pixel/latte-24.png";
+      latte.alt = "";
+      latte.width = 16;
+      latte.height = 16;
+      day.append(latte);
+    }
+
+    for (let i = 0; i < toastCount; i += 1) {
       const toast = document.createElement("img");
       toast.className = "velocity-toast";
       toast.src = "assets/pixel/toast-24.png";
       toast.alt = "";
-      toast.width = 10;
-      toast.height = 10;
+      toast.width = 16;
+      toast.height = 16;
       day.append(toast);
-    }
-
-    if (point.count > visibleToasts) {
-      const overflow = document.createElement("span");
-      overflow.className = "velocity-overflow";
-      overflow.textContent = `+${point.count - visibleToasts}`;
-      day.append(overflow);
     }
 
     chart.append(day);
