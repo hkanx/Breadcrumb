@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Breadcrumb logo">
+  <rect width="64" height="64" rx="12" fill="#0f1b2e"/>
+  <g transform="translate(7 19) rotate(-12 25 12)">
+    <rect x="2" y="6" width="50" height="20" rx="10" fill="#f2be72"/>
+    <rect x="2" y="6" width="50" height="20" rx="10" fill="none" stroke="#c88a3d" stroke-width="2"/>
+    <path d="M14 9 L18 23" stroke="#e9a95f" stroke-width="2" stroke-linecap="round"/>
+    <path d="M24 9 L28 23" stroke="#e9a95f" stroke-width="2" stroke-linecap="round"/>
+    <path d="M34 9 L38 23" stroke="#e9a95f" stroke-width="2" stroke-linecap="round"/>
+    <path d="M44 9 L48 23" stroke="#e9a95f" stroke-width="2" stroke-linecap="round"/>
+  </g>
+</svg>
