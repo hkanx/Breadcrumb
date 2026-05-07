@@ -594,17 +594,27 @@ async function runGithubBackupUpsert(payload) {
 }
 
 async function githubDeviceRequest(endpoint, body) {
+  const form = new URLSearchParams();
+  Object.entries(body || {}).forEach(([key, value]) => {
+    if (value !== undefined && value !== null) {
+      form.set(key, String(value));
+    }
+  });
+
   const response = await fetch(`https://github.com${endpoint}`, {
     method: "POST",
     headers: {
       Accept: "application/json",
-      "Content-Type": "application/json"
+      "Content-Type": "application/x-www-form-urlencoded"
     },
-    body: JSON.stringify(body)
+    body: form.toString()
   });
-  const data = await response.json();
+  const data = await response.json().catch(() => ({}));
   if (!response.ok) {
     throw new Error(data.error_description || data.error || "GitHub OAuth request failed.");
+  }
+  if (data.error) {
+    throw new Error(data.error_description || data.error);
   }
   return data;
 }
@@ -626,6 +636,7 @@ async function startGithubDeviceFlow(clientId) {
     deviceCode: payload.device_code,
     userCode: payload.user_code,
     verificationUri: payload.verification_uri,
+    verificationUriComplete: payload.verification_uri_complete || null,
     interval: Math.max(2, Number(payload.interval || 5)),
     expiresAt: Date.now() + Number(payload.expires_in || 900) * 1000,
     state: "pending",
@@ -745,14 +756,15 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     runGithubBackupUpsert(message.payload)
       .then((status) => sendResponse({ ok: true, status, summary: status.summary, repo: status.repo, branch: status.branch }))
       .catch((error) => {
+        const messageText = error instanceof Error ? error.message : "GitHub backup failed.";
         chrome.storage.local.set({
           lastGithubBackupStatus: {
             ok: false,
             at: new Date().toISOString(),
-            message: error instanceof Error ? error.message : "GitHub backup failed."
+            message: messageText
           }
         });
-        sendResponse({ ok: false, message: error instanceof Error ? error.message : "GitHub backup failed." });
+        sendResponse({ ok: false, message: messageText });
       });
     return true;
   }
@@ -773,11 +785,17 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     startGithubDeviceFlow(clientId)
       .then(async (flow) => {
         try {
-          await chrome.tabs.create({ url: flow.verificationUri });
+          await chrome.tabs.create({ url: flow.verificationUriComplete || flow.verificationUri });
         } catch (_error) {
           // ignore
         }
-        sendResponse({ ok: true, flowId: flow.id, userCode: flow.userCode, verificationUri: flow.verificationUri });
+        sendResponse({
+          ok: true,
+          flowId: flow.id,
+          userCode: flow.userCode,
+          verificationUri: flow.verificationUri,
+          verificationUriComplete: flow.verificationUriComplete
+        });
       })
       .catch((error) => sendResponse({ ok: false, message: error instanceof Error ? error.message : "Failed to start OAuth flow." }));
     return true;

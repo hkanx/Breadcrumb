@@ -914,7 +914,7 @@ function wireToolbarActions() {
       });
 
       if (!response?.ok) {
-        setGithubStatus(response?.message || "Backup failed.", "error");
+        setGithubStatus(`Backup failed: ${response?.message || "Unknown error"}`, "error");
         return;
       }
 
@@ -924,7 +924,7 @@ function wireToolbarActions() {
       const sha = response.status?.latestCommitSha ? String(response.status.latestCommitSha).slice(0, 7) : "unknown";
       setGithubStatus(`Backup complete to ${repo}@${branch}: ${s.updated} updated, ${s.created} created, ${s.unchanged} unchanged, ${s.deleted} deleted. Latest commit: ${sha}`, "success");
     } catch (error) {
-      setGithubStatus(error instanceof Error ? error.message : "Backup failed.", "error");
+      setGithubStatus(`Backup failed: ${error instanceof Error ? error.message : "Unknown error"}`, "error");
     }
   });
 
