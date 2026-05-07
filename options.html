@@ -66,19 +66,40 @@
           </div>
         </header>
 
-        <section class="toolbar-card">
-          <div class="position-actions">
-            <button id="bulk-favorite" class="btn-secondary" type="button">Bulk Favorite Visible</button>
-            <button id="bulk-status-applied" class="btn-secondary" type="button">Bulk Set Applied</button>
-            <button id="bulk-tag-core" class="btn-secondary" type="button">Bulk Add Tag: core</button>
-            <button id="bulk-export" class="btn-secondary" type="button">Bulk Export Markdown</button>
+        <details class="toolbar-card controls-foldout">
+          <summary>Bulk + Export Actions</summary>
+          <div class="foldout-body">
+            <div class="position-actions">
+              <button id="bulk-favorite" class="btn-secondary" type="button">Bulk Favorite Visible</button>
+              <button id="bulk-status-applied" class="btn-secondary" type="button">Bulk Set Applied</button>
+              <button id="bulk-tag-core" class="btn-secondary" type="button">Bulk Add Tag: core</button>
+              <button id="bulk-export" class="btn-secondary" type="button">Bulk Export Markdown</button>
+            </div>
+            <div class="position-actions">
+              <button id="export-json" class="btn-secondary" type="button">Export Vault JSON</button>
+              <button id="export-backup-bundle" class="btn-secondary" type="button">Export Backup Bundle</button>
+              <label class="btn-secondary file-btn" for="import-json">Import Vault JSON</label>
+              <input id="import-json" type="file" accept="application/json" hidden />
+            </div>
+            <section class="github-backup-panel">
+              <p class="eyebrow">Private GitHub Backup</p>
+              <div class="github-fields">
+                <input id="gh-client-id" type="text" placeholder="GitHub OAuth App Client ID" />
+                <input id="gh-token" type="password" placeholder="GitHub token (repo scope)" />
+                <input id="gh-owner" type="text" placeholder="Repo owner (e.g. your-username)" />
+                <input id="gh-repo" type="text" placeholder="Repo name (private repo)" />
+                <input id="gh-branch" type="text" placeholder="Branch (default: main)" />
+              </div>
+              <div class="position-actions">
+                <button id="gh-oauth-connect" class="btn-secondary" type="button">Connect GitHub OAuth</button>
+                <button id="gh-save-connection" class="btn-secondary" type="button">Save Connection</button>
+                <button id="gh-backup-now" class="btn-primary" type="button">Backup to GitHub Now</button>
+                <button id="gh-clear-connection" class="btn-secondary" type="button">Disconnect</button>
+              </div>
+              <p id="gh-backup-status" class="status" aria-live="polite"></p>
+            </section>
           </div>
-          <div class="position-actions">
-            <button id="export-json" class="btn-secondary" type="button">Export Vault JSON</button>
-            <label class="btn-secondary file-btn" for="import-json">Import Vault JSON</label>
-            <input id="import-json" type="file" accept="application/json" hidden />
-          </div>
-        </section>
+        </details>
 
         <section class="velocity-card" aria-label="Daily application velocity">
           <div class="velocity-header">

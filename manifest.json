@@ -9,6 +9,10 @@
     "storage",
     "sidePanel"
   ],
+  "host_permissions": [
+    "https://api.github.com/*",
+    "https://github.com/*"
+  ],
   "background": {
     "service_worker": "background.js"
   },

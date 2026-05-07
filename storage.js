@@ -7,6 +7,15 @@ class BreadcrumbStorage {
     this.dbPromise = null;
   }
 
+  hashString(input) {
+    const source = String(input || "");
+    let hash = 0;
+    for (let i = 0; i < source.length; i += 1) {
+      hash = (hash * 31 + source.charCodeAt(i)) >>> 0;
+    }
+    return hash.toString(16).padStart(8, "0");
+  }
+
   open() {
     if (this.dbPromise) {
       return this.dbPromise;
@@ -79,10 +88,11 @@ class BreadcrumbStorage {
   }
 
   normalizeScrap(scrap) {
+    const backupId = typeof scrap.backupId === "string" && scrap.backupId.trim() ? scrap.backupId.trim() : undefined;
     return {
       timestamp: scrap.timestamp || new Date().toISOString(),
       url: typeof scrap.url === "string" ? scrap.url : "",
-      rawText: typeof scrap.rawText === "string" ? scrap.rawText : "",
+      rawText: typeof scrap.rawText === "string" ? this.formatReadableText(scrap.rawText) : "",
       note: typeof scrap.note === "string" ? scrap.note : undefined,
       lastEditedAt: scrap.lastEditedAt || undefined,
       status: scrap.status || "saved",
@@ -91,14 +101,15 @@ class BreadcrumbStorage {
       confidence: typeof scrap.confidence === "number" ? scrap.confidence : undefined,
       captureSource: scrap.captureSource || "manual",
       schemaVersion: this.schemaVersion,
-      captureCount: Number.isInteger(scrap.captureCount) && scrap.captureCount > 0 ? scrap.captureCount : 1
+      captureCount: Number.isInteger(scrap.captureCount) && scrap.captureCount > 0 ? scrap.captureCount : 1,
+      backupId
     };
   }
 
   normalizeScrapInput(content) {
     if (typeof content === "string") {
       return {
-        rawText: content.trim(),
+        rawText: this.formatReadableText(content),
         note: undefined,
         url: window.location.href,
         status: "saved",
@@ -123,7 +134,7 @@ class BreadcrumbStorage {
     }
 
     return {
-      rawText: content.rawText.trim(),
+      rawText: this.formatReadableText(content.rawText),
       note: typeof content.note === "string" && content.note.trim() ? content.note.trim() : undefined,
       url: normalizedUrl,
       status: content.status || "saved",
@@ -131,6 +142,138 @@ class BreadcrumbStorage {
       favorite: Boolean(content.favorite),
       confidence: typeof content.confidence === "number" ? content.confidence : undefined,
       captureSource: content.captureSource || "manual"
+    };
+  }
+
+  formatReadableText(rawText) {
+    const source = String(rawText || "").replace(/\r\n?/g, "\n").trim();
+    if (!source) {
+      return "";
+    }
+
+    const splitDenseParagraph = (line) => {
+      if (line.length <= 420) {
+        return [line];
+      }
+      return line
+        .split(/(?<=[.!?])\s+(?=[A-Z0-9])/g)
+        .map((part) => part.trim())
+        .filter(Boolean);
+    };
+
+    const isStructuredLine = (line) => {
+      return (
+        /^[-*•]\s+/.test(line) ||
+        /^\d+\.\s+/.test(line) ||
+        /:$/.test(line) ||
+        /^[A-Z][A-Z0-9\s/&\-]{6,}$/.test(line)
+      );
+    };
+
+    const output = [];
+    const lines = source.split("\n");
+    let prevBlank = false;
+
+    for (const rawLine of lines) {
+      const line = rawLine.replace(/\s+/g, " ").trim();
+      if (!line) {
+        if (!prevBlank && output.length > 0) {
+          output.push("");
+        }
+        prevBlank = true;
+        continue;
+      }
+
+      const parts = splitDenseParagraph(line);
+      for (const part of parts) {
+        const normalized = part.trim();
+        if (!normalized) {
+          continue;
+        }
+
+        const prev = output[output.length - 1];
+        const needsParagraphBreak = isStructuredLine(normalized) || (prev && isStructuredLine(prev));
+        if (needsParagraphBreak && prev && prev !== "") {
+          output.push("");
+        }
+
+        output.push(normalized);
+        prevBlank = false;
+      }
+    }
+
+    const compacted = [];
+    for (const line of output) {
+      if (line === "" && compacted[compacted.length - 1] === "") {
+        continue;
+      }
+      compacted.push(line);
+    }
+
+    return compacted.join("\n").trim();
+  }
+
+  slugify(value) {
+    return String(value || "")
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-+|-+$/g, "")
+      .slice(0, 80) || "item";
+  }
+
+  stableScrapId(companyName, positionName, scrap) {
+    if (scrap.backupId && String(scrap.backupId).trim()) {
+      return String(scrap.backupId).trim();
+    }
+    const base = `${companyName}|${positionName}|${scrap.timestamp || ""}|${scrap.url || ""}`.toLowerCase();
+    return `bkp_${this.hashString(base)}`;
+  }
+
+  ensureBackupId(companyName, positionName, scrap) {
+    if (scrap.backupId && String(scrap.backupId).trim()) {
+      return String(scrap.backupId).trim();
+    }
+    const timestamp = String(scrap.timestamp || new Date().toISOString());
+    const normalizedUrl = this.normalizeUrlForDedup(scrap.url || "");
+    const seed = `${timestamp}|${normalizedUrl}|${String(companyName || "").trim().toLowerCase()}|${String(positionName || "").trim().toLowerCase()}`;
+    scrap.backupId = `bkp_${this.hashString(seed)}`;
+    return scrap.backupId;
+  }
+
+  toMarkdownForScrap(companyName, positionName, scrap) {
+    const body = this.formatReadableText(scrap.rawText || "");
+    const tags = (scrap.tags || []).join(", ");
+    const lines = [
+      `# ${companyName} | ${positionName}`,
+      "",
+      `- Timestamp: ${scrap.timestamp || ""}`,
+      `- URL: ${scrap.url || ""}`,
+      `- Status: ${scrap.status || "saved"}`,
+      `- Favorite: ${scrap.favorite ? "yes" : "no"}`,
+      `- Tags: ${tags || "none"}`,
+      `- Confidence: ${typeof scrap.confidence === "number" ? scrap.confidence : "n/a"}`,
+      ""
+    ];
+
+    if (scrap.note) {
+      lines.push(`## Note`, "", scrap.note, "");
+    }
+
+    lines.push("## Capture", "", body || "(empty)");
+    return lines.join("\n");
+  }
+
+  sanitizeScrapForBackup(scrap, profile) {
+    if (profile === "full") {
+      return this.normalizeScrap(scrap);
+    }
+
+    const normalized = this.normalizeScrap(scrap);
+    const clippedText = this.formatReadableText(normalized.rawText).slice(0, 6000);
+    return {
+      ...normalized,
+      rawText: clippedText,
+      note: normalized.note ? normalized.note.slice(0, 1200) : undefined
     };
   }
 
@@ -250,12 +393,14 @@ class BreadcrumbStorage {
             existing.captureSource = scrap.captureSource;
             existing.captureCount = (existingNorm.captureCount || 1) + 1;
             existing.lastEditedAt = new Date().toISOString();
+            existing.backupId = this.ensureBackupId(companyName, positionName, existing);
             outcome = "merged";
             store.put(companyRecord);
             return;
           }
         }
 
+        scrap.backupId = this.ensureBackupId(companyName, positionName, scrap);
         targetPosition.scraps.push(scrap);
         store.put(companyRecord);
       };
@@ -308,7 +453,7 @@ class BreadcrumbStorage {
         }
 
         const normalized = this.normalizeScrap(scrap);
-        scrap.rawText = patch.rawText !== undefined ? patch.rawText.trim() : normalized.rawText;
+        scrap.rawText = patch.rawText !== undefined ? this.formatReadableText(patch.rawText) : normalized.rawText;
         scrap.note = patch.note !== undefined ? (typeof patch.note === "string" && patch.note.trim() ? patch.note.trim() : undefined) : normalized.note;
         scrap.url = patch.url !== undefined ? (patch.url ? patch.url.trim() : "") : normalized.url;
         scrap.status = patch.status !== undefined ? patch.status : normalized.status;
@@ -316,6 +461,7 @@ class BreadcrumbStorage {
         scrap.tags = patch.tags !== undefined ? this.normalizeTags(patch.tags) : normalized.tags;
         scrap.lastEditedAt = new Date().toISOString();
         scrap.schemaVersion = this.schemaVersion;
+        scrap.backupId = this.ensureBackupId(companyName, positionName, scrap);
         store.put(company);
         updated = true;
       };
@@ -391,7 +537,9 @@ class BreadcrumbStorage {
             destinationPosition.scraps = [];
           }
 
-          destinationPosition.scraps.push({ ...this.normalizeScrap(scrap), lastEditedAt: new Date().toISOString() });
+          const normalizedScrap = this.normalizeScrap(scrap);
+          normalizedScrap.backupId = this.ensureBackupId(sourceCompanyName, sourcePositionName, normalizedScrap);
+          destinationPosition.scraps.push({ ...normalizedScrap, lastEditedAt: new Date().toISOString() });
         };
 
         if (destinationCompanyName === sourceCompanyName) {
@@ -480,7 +628,11 @@ class BreadcrumbStorage {
         ...company,
         positions: (company.positions || []).map((position) => ({
           ...position,
-          scraps: (position.scraps || []).map((scrap) => this.normalizeScrap(scrap))
+          scraps: (position.scraps || []).map((scrap) => {
+            const normalized = this.normalizeScrap(scrap);
+            normalized.backupId = this.ensureBackupId(company.name, position.name, normalized);
+            return normalized;
+          })
         }))
       }))
       .sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: "base" }));
@@ -520,6 +672,153 @@ class BreadcrumbStorage {
       schemaVersion: this.schemaVersion,
       exportedAt: new Date().toISOString(),
       companies
+    };
+  }
+
+  async persistMissingBackupIds() {
+    const db = await this.open();
+    await new Promise((resolve, reject) => {
+      const tx = db.transaction(this.storeName, "readwrite");
+      const store = tx.objectStore(this.storeName);
+      const getAllRequest = store.getAll();
+
+      getAllRequest.onsuccess = () => {
+        const companies = Array.isArray(getAllRequest.result) ? getAllRequest.result : [];
+        companies.forEach((company) => {
+          let changed = false;
+          (company.positions || []).forEach((position) => {
+            (position.scraps || []).forEach((scrap) => {
+              if (!scrap.backupId) {
+                this.ensureBackupId(company.name, position.name, scrap);
+                changed = true;
+              }
+            });
+          });
+          if (changed) {
+            store.put(company);
+          }
+        });
+      };
+
+      getAllRequest.onerror = () => reject(new Error(`Failed to load companies for backupId migration: ${getAllRequest.error?.message || "Unknown error"}`));
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(new Error(`BackupId migration transaction failed: ${tx.error?.message || "Unknown error"}`));
+      tx.onabort = () => reject(new Error(`BackupId migration transaction aborted: ${tx.error?.message || "Unknown error"}`));
+    });
+  }
+
+  async exportBackupBundle(options = {}) {
+    await this.persistMissingBackupIds();
+    const profile = options.profile === "full" ? "full" : "sanitized";
+    const companies = await this.getAlphabeticalCompanies();
+    const exportedAt = new Date().toISOString();
+    const files = [];
+    const companyIndex = [];
+    const dateIndex = new Map();
+    const positionIndex = new Map();
+    const canonicalCompanies = [];
+    const backupIdMap = {};
+
+    companies.forEach((company) => {
+      const companySlug = this.slugify(company.name);
+      const companyEntry = { name: company.name, slug: companySlug, positions: [] };
+
+      (company.positions || []).forEach((position) => {
+        const positionSlug = this.slugify(position.name);
+        const positionEntry = { name: position.name, slug: positionSlug, count: 0 };
+
+        (position.scraps || []).forEach((scrap) => {
+          const normalized = this.sanitizeScrapForBackup(scrap, profile);
+          const scrapId = this.stableScrapId(company.name, position.name, normalized);
+          const dayKey = this.toLocalDayKey(normalized.timestamp || exportedAt);
+          const [year, month, day] = dayKey.split("-");
+          const timestampSlug = (normalized.timestamp || exportedAt).replace(/[:.]/g, "-");
+          const filename = `${timestampSlug}-${scrapId}.md`;
+          const byCompanyPath = `by-company/${companySlug}/${positionSlug}/${filename}`;
+          const byDatePath = `by-date/${year}/${month}/${day}/${companySlug}__${positionSlug}__${scrapId}.md`;
+          const markdown = this.toMarkdownForScrap(company.name, position.name, normalized);
+
+          files.push({ path: byCompanyPath, content: markdown });
+          files.push({ path: byDatePath, content: markdown });
+
+          if (!dateIndex.has(dayKey)) {
+            dateIndex.set(dayKey, []);
+          }
+          dateIndex.get(dayKey).push({ company: company.name, position: position.name, id: scrapId, path: byDatePath });
+
+          const posKey = `${company.name}::${position.name}`;
+          if (!positionIndex.has(posKey)) {
+            positionIndex.set(posKey, []);
+          }
+          positionIndex.get(posKey).push({ id: scrapId, path: byCompanyPath, date: dayKey });
+
+          canonicalCompanies.push({
+            company: company.name,
+            position: position.name,
+            scrapId,
+            ...normalized
+          });
+
+          backupIdMap[scrapId] = {
+            backupId: scrapId,
+            company: company.name,
+            position: position.name,
+            timestamp: normalized.timestamp || exportedAt,
+            byCompanyPath,
+            byDatePath
+          };
+          positionEntry.count += 1;
+        });
+
+        companyEntry.positions.push(positionEntry);
+      });
+
+      companyIndex.push(companyEntry);
+    });
+
+    const companiesJson = {
+      generatedAt: exportedAt,
+      companies: companyIndex
+    };
+    const positionsJson = {
+      generatedAt: exportedAt,
+      positions: Array.from(positionIndex.entries()).map(([key, entries]) => {
+        const [company, position] = key.split("::");
+        return { company, position, entries };
+      })
+    };
+    const datesJson = {
+      generatedAt: exportedAt,
+      dates: Array.from(dateIndex.entries())
+        .sort((a, b) => a[0].localeCompare(b[0]))
+        .map(([date, entries]) => ({ date, entries }))
+    };
+    const manifest = {
+      schemaVersion: this.schemaVersion,
+      exportedAt,
+      profile,
+      idStrategy: "persistent backupId",
+      recordCount: canonicalCompanies.length
+    };
+
+    files.push({ path: "data/vault.json", content: JSON.stringify({
+      schemaVersion: this.schemaVersion,
+      exportedAt,
+      profile,
+      records: canonicalCompanies
+    }, null, 2) });
+    files.push({ path: "indexes/companies.json", content: JSON.stringify(companiesJson, null, 2) });
+    files.push({ path: "indexes/positions.json", content: JSON.stringify(positionsJson, null, 2) });
+    files.push({ path: "indexes/dates.json", content: JSON.stringify(datesJson, null, 2) });
+    files.push({ path: "indexes/backup-id-map.json", content: JSON.stringify({ generatedAt: exportedAt, map: backupIdMap }, null, 2) });
+    files.push({ path: "meta/backup-manifest.json", content: JSON.stringify(manifest, null, 2) });
+
+    return {
+      schemaVersion: this.schemaVersion,
+      exportedAt,
+      profile,
+      files,
+      backupIdMap
     };
   }
 

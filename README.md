@@ -34,6 +34,7 @@ Breadcrumb bridges those two modes by making capture lightweight and retrieval s
 - Metadata controls: status, tags, favorites.
 - Bulk actions for visible/filtered records.
 - Export to Markdown and full JSON backup/import.
+- Export backup bundles for private GitHub archival workflows.
 - Side Panel support for in-context review.
 
 ## Technical Decisions and System Design
@@ -103,6 +104,12 @@ Scrap metadata includes:
 **Decision:** Add schema-aware JSON import/export.  
 **Why:** Long-term maintainability and user-controlled migration/backup.
 
+### 9) Private Backup Without Cloud Coupling
+
+**Decision:** Add `exportBackupBundle({ profile })` for deterministic, repo-friendly export payloads.  
+**Why:** Keep production data local while enabling auditable private GitHub backups.  
+**Implementation:** Companion script materializes bundle files in a private repo and commits/pushes via local git auth, using persistent `backupId` upserts to edit-in-place without duplicate records.
+
 ## End-to-End Flow
 
 1. User triggers capture (shortcut/icon/popup).
@@ -126,6 +133,8 @@ Breadcrumb is local-first:
 - No required backend service.
 - No required cloud sync.
 - Backup/restore via JSON export/import.
+- Optional private-repo backups via export bundle + local script.
+- Optional direct private-repo backup from Vault via GitHub token + repo settings.
 
 ## Install (Unpacked)
 
@@ -154,3 +163,8 @@ Key files:
 - `storage.js`
 - `popup.*`
 - `options.*`
+
+Backup docs:
+
+- `docs/private-github-backup.md`
+- `scripts/backup_to_github.mjs`

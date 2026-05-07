@@ -5,6 +5,7 @@ const SCHEMA_VERSION = 2;
 const CONFIDENCE_THRESHOLD = 0.55;
 
 let dbPromise = null;
+const githubOAuthFlows = new Map();
 
 function normalizeTags(tags) {
   if (!Array.isArray(tags)) {
@@ -35,6 +36,26 @@ function toLocalDayKey(dateInput) {
 
 function dedupKey({ url, timestamp, position }) {
   return `${normalizeUrlForDedup(url)}|${toLocalDayKey(timestamp)}|${String(position || "").trim().toLowerCase()}`;
+}
+
+function hashString(input) {
+  const source = String(input || "");
+  let hash = 0;
+  for (let i = 0; i < source.length; i += 1) {
+    hash = (hash * 31 + source.charCodeAt(i)) >>> 0;
+  }
+  return hash.toString(16).padStart(8, "0");
+}
+
+function ensureBackupId(companyName, positionName, scrap) {
+  if (scrap.backupId && String(scrap.backupId).trim()) {
+    return String(scrap.backupId).trim();
+  }
+  const timestamp = String(scrap.timestamp || new Date().toISOString());
+  const normalizedUrl = normalizeUrlForDedup(scrap.url || "");
+  const seed = `${timestamp}|${normalizedUrl}|${String(companyName || "").trim().toLowerCase()}|${String(positionName || "").trim().toLowerCase()}`;
+  scrap.backupId = `bkp_${hashString(seed)}`;
+  return scrap.backupId;
 }
 
 function guessCompanyFromTitle(title) {
@@ -106,7 +127,8 @@ function normalizeScrap(scrap) {
     confidence: typeof scrap.confidence === "number" ? scrap.confidence : undefined,
     captureSource: scrap.captureSource || "shortcut_auto",
     schemaVersion: SCHEMA_VERSION,
-    captureCount: Number.isInteger(scrap.captureCount) && scrap.captureCount > 0 ? scrap.captureCount : 1
+    captureCount: Number.isInteger(scrap.captureCount) && scrap.captureCount > 0 ? scrap.captureCount : 1,
+    backupId: typeof scrap.backupId === "string" && scrap.backupId.trim() ? scrap.backupId.trim() : undefined
   };
 }
 
@@ -152,8 +174,10 @@ async function saveScrapWithPolicyInBackground(companyName, positionName, scrapI
         existing.captureCount = (existing.captureCount || 1) + 1;
         existing.lastEditedAt = new Date().toISOString();
         existing.schemaVersion = SCHEMA_VERSION;
+        existing.backupId = ensureBackupId(companyName, positionName, existing);
         outcome = "merged";
       } else {
+        scrap.backupId = ensureBackupId(companyName, positionName, scrap);
         position.scraps.push(scrap);
       }
 
@@ -324,6 +348,332 @@ async function runShortcutAutoCapture() {
   return saved;
 }
 
+function utf8ToBase64(input) {
+  return btoa(unescape(encodeURIComponent(String(input || ""))));
+}
+
+function base64ToUtf8(input) {
+  return decodeURIComponent(escape(atob(String(input || ""))));
+}
+
+async function githubRequest({ method = "GET", endpoint, token, body }) {
+  const response = await fetch(`https://api.github.com${endpoint}`, {
+    method,
+    headers: {
+      Accept: "application/vnd.github+json",
+      Authorization: `Bearer ${token}`,
+      "X-GitHub-Api-Version": "2022-11-28",
+      ...(body ? { "Content-Type": "application/json" } : {})
+    },
+    body: body ? JSON.stringify(body) : undefined
+  });
+
+  if (!response.ok) {
+    if (response.status === 404) {
+      return { ok: false, status: 404, data: null };
+    }
+    const text = await response.text();
+    throw new Error(`GitHub API error (${response.status}): ${text.slice(0, 240)}`);
+  }
+
+  return { ok: true, status: response.status, data: await response.json() };
+}
+
+async function getGithubFile(config, filePath) {
+  const endpoint = `/repos/${encodeURIComponent(config.owner)}/${encodeURIComponent(config.repo)}/contents/${filePath}?ref=${encodeURIComponent(config.branch || "main")}`;
+  const response = await githubRequest({ endpoint, token: config.token });
+  if (!response.ok && response.status === 404) {
+    return null;
+  }
+  const file = response.data;
+  return {
+    sha: file.sha,
+    content: file.content ? base64ToUtf8(String(file.content).replace(/\n/g, "")) : ""
+  };
+}
+
+async function putGithubFile(config, filePath, content, message) {
+  const existing = await getGithubFile(config, filePath);
+  if (existing && existing.content === content) {
+    return { changed: false };
+  }
+  const endpoint = `/repos/${encodeURIComponent(config.owner)}/${encodeURIComponent(config.repo)}/contents/${filePath}`;
+  await githubRequest({
+    method: "PUT",
+    endpoint,
+    token: config.token,
+    body: {
+      message,
+      content: utf8ToBase64(content),
+      branch: config.branch || "main",
+      ...(existing?.sha ? { sha: existing.sha } : {})
+    }
+  });
+  return { changed: true, existed: Boolean(existing) };
+}
+
+function recordsFromMap(map) {
+  return Object.entries(map || {}).map(([backupId, entry]) => {
+    const timestamp = String(entry.timestamp || "");
+    const dayKey = /^\d{4}-\d{2}-\d{2}/.test(timestamp) ? timestamp.slice(0, 10) : "";
+    return {
+      backupId,
+      company: entry.company || "Unknown Company",
+      position: entry.position || "Untitled Position",
+      timestamp,
+      dayKey,
+      byCompanyPath: entry.byCompanyPath,
+      byDatePath: entry.byDatePath
+    };
+  });
+}
+
+function buildIndexesFromResolvedMap(resolvedMap, generatedAt) {
+  const records = recordsFromMap(resolvedMap);
+  const companies = new Map();
+  const positions = new Map();
+  const dates = new Map();
+
+  records.forEach((record) => {
+    if (!companies.has(record.company)) {
+      companies.set(record.company, new Map());
+    }
+    const positionMap = companies.get(record.company);
+    if (!positionMap.has(record.position)) {
+      positionMap.set(record.position, []);
+    }
+    positionMap.get(record.position).push({
+      id: record.backupId,
+      timestamp: record.timestamp,
+      path: record.byCompanyPath
+    });
+
+    const posKey = `${record.company}::${record.position}`;
+    if (!positions.has(posKey)) {
+      positions.set(posKey, { company: record.company, position: record.position, entries: [] });
+    }
+    positions.get(posKey).entries.push({
+      id: record.backupId,
+      date: record.dayKey,
+      path: record.byCompanyPath
+    });
+
+    if (!dates.has(record.dayKey)) {
+      dates.set(record.dayKey, []);
+    }
+    dates.get(record.dayKey).push({
+      company: record.company,
+      position: record.position,
+      id: record.backupId,
+      path: record.byDatePath
+    });
+  });
+
+  return {
+    companies: {
+      generatedAt,
+      companies: Array.from(companies.entries()).map(([name, posMap]) => ({
+        name,
+        positions: Array.from(posMap.entries()).map(([positionName, entries]) => ({
+          name: positionName,
+          count: entries.length,
+          entries
+        }))
+      }))
+    },
+    positions: {
+      generatedAt,
+      positions: Array.from(positions.values())
+    },
+    dates: {
+      generatedAt,
+      dates: Array.from(dates.entries())
+        .sort((a, b) => a[0].localeCompare(b[0]))
+        .map(([date, entries]) => ({ date, entries }))
+    }
+  };
+}
+
+async function runGithubBackupUpsert(payload) {
+  const config = payload?.config || {};
+  const bundle = payload?.bundle || {};
+  if (!config.token || !config.owner || !config.repo) {
+    throw new Error("GitHub backup requires token, owner, and repo.");
+  }
+  if (!Array.isArray(bundle.files)) {
+    throw new Error("Invalid bundle payload.");
+  }
+
+  const fileMap = new Map();
+  bundle.files.forEach((file) => {
+    if (file?.path && typeof file.content === "string") {
+      fileMap.set(file.path, file.content);
+    }
+  });
+
+  let incomingMap = bundle.backupIdMap;
+  if (!incomingMap) {
+    const mapFile = fileMap.get("indexes/backup-id-map.json");
+    if (mapFile) {
+      const parsed = JSON.parse(mapFile);
+      incomingMap = parsed?.map || {};
+    }
+  }
+  if (!incomingMap || typeof incomingMap !== "object") {
+    throw new Error("Bundle is missing backup identity map.");
+  }
+
+  const existingMapFile = await getGithubFile(config, "indexes/backup-id-map.json");
+  const existingMap = existingMapFile ? (JSON.parse(existingMapFile.content)?.map || {}) : {};
+
+  const summary = { created: 0, updated: 0, unchanged: 0, deleted: 0 };
+  const resolvedMap = {};
+  const commitMessage = `[Backup] ${new Date().toISOString()} (${bundle.profile || "sanitized"})`;
+
+  for (const [backupId, incoming] of Object.entries(incomingMap)) {
+    const previous = existingMap[backupId];
+    const incomingCompanyPath = incoming.byCompanyPath;
+    const incomingDatePath = incoming.byDatePath;
+    const markdownContent = fileMap.get(incomingCompanyPath) || fileMap.get(incomingDatePath);
+    if (!markdownContent) {
+      continue;
+    }
+
+    const targetCompanyPath = previous?.byCompanyPath || incomingCompanyPath;
+    const targetDatePath = previous?.byDatePath || incomingDatePath;
+
+    const companyWrite = await putGithubFile(config, targetCompanyPath, markdownContent, commitMessage);
+    const dateWrite = await putGithubFile(config, targetDatePath, markdownContent, commitMessage);
+
+    if (!previous) {
+      summary.created += 1;
+    } else if (companyWrite.changed || dateWrite.changed) {
+      summary.updated += 1;
+    } else {
+      summary.unchanged += 1;
+    }
+
+    resolvedMap[backupId] = {
+      ...incoming,
+      byCompanyPath: targetCompanyPath,
+      byDatePath: targetDatePath
+    };
+  }
+
+  const generatedAt = new Date().toISOString();
+  const indexes = buildIndexesFromResolvedMap(resolvedMap, generatedAt);
+  await putGithubFile(config, "indexes/backup-id-map.json", JSON.stringify({ generatedAt, map: resolvedMap }, null, 2), commitMessage);
+  await putGithubFile(config, "indexes/companies.json", JSON.stringify(indexes.companies, null, 2), commitMessage);
+  await putGithubFile(config, "indexes/positions.json", JSON.stringify(indexes.positions, null, 2), commitMessage);
+  await putGithubFile(config, "indexes/dates.json", JSON.stringify(indexes.dates, null, 2), commitMessage);
+
+  // Persist non-scrap files from bundle (canonical payload and manifest).
+  for (const [path, content] of fileMap.entries()) {
+    if (path.startsWith("by-company/") || path.startsWith("by-date/") || path.startsWith("indexes/")) {
+      continue;
+    }
+    await putGithubFile(config, path, content, commitMessage);
+  }
+
+  await chrome.storage.local.set({ lastGithubBackupStatus: { ok: true, at: new Date().toISOString(), summary, repo: `${config.owner}/${config.repo}`, branch: config.branch || "main" } });
+  return summary;
+}
+
+async function githubDeviceRequest(endpoint, body) {
+  const response = await fetch(`https://github.com${endpoint}`, {
+    method: "POST",
+    headers: {
+      Accept: "application/json",
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify(body)
+  });
+  const data = await response.json();
+  if (!response.ok) {
+    throw new Error(data.error_description || data.error || "GitHub OAuth request failed.");
+  }
+  return data;
+}
+
+function createFlowId() {
+  return `flow_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
+}
+
+async function startGithubDeviceFlow(clientId) {
+  const payload = await githubDeviceRequest("/login/device/code", {
+    client_id: clientId,
+    scope: "repo"
+  });
+
+  const flowId = createFlowId();
+  const flow = {
+    id: flowId,
+    clientId,
+    deviceCode: payload.device_code,
+    userCode: payload.user_code,
+    verificationUri: payload.verification_uri,
+    interval: Math.max(2, Number(payload.interval || 5)),
+    expiresAt: Date.now() + Number(payload.expires_in || 900) * 1000,
+    state: "pending",
+    token: null,
+    message: null,
+    lastPollAt: 0
+  };
+  githubOAuthFlows.set(flowId, flow);
+  return flow;
+}
+
+async function pollGithubDeviceFlow(flow) {
+  if (flow.state !== "pending") {
+    return flow;
+  }
+  if (Date.now() > flow.expiresAt) {
+    flow.state = "expired";
+    flow.message = "OAuth device code expired.";
+    return flow;
+  }
+  if (Date.now() - flow.lastPollAt < flow.interval * 1000) {
+    return flow;
+  }
+
+  flow.lastPollAt = Date.now();
+  try {
+    const tokenResp = await githubDeviceRequest("/login/oauth/access_token", {
+      client_id: flow.clientId,
+      device_code: flow.deviceCode,
+      grant_type: "urn:ietf:params:oauth:grant-type:device_code"
+    });
+
+    if (tokenResp.access_token) {
+      flow.state = "authorized";
+      flow.token = tokenResp.access_token;
+      flow.message = "Authorized.";
+      return flow;
+    }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "OAuth polling error.";
+    if (/authorization_pending/i.test(message)) {
+      flow.state = "pending";
+      return flow;
+    }
+    if (/slow_down/i.test(message)) {
+      flow.interval += 2;
+      flow.state = "pending";
+      return flow;
+    }
+    if (/expired_token/i.test(message)) {
+      flow.state = "expired";
+      flow.message = "OAuth device code expired.";
+      return flow;
+    }
+    flow.state = "failed";
+    flow.message = message;
+    return flow;
+  }
+
+  return flow;
+}
+
 chrome.action.onClicked.addListener(async (tab) => {
   await captureFromTab(tab, "action_click");
 });
@@ -374,6 +724,68 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         sendResponse({ ok: false, message: error instanceof Error ? error.message : "Unable to configure side panel." });
       }
     });
+    return true;
+  }
+
+  if (message?.type === "GITHUB_BACKUP_UPSERT") {
+    runGithubBackupUpsert(message.payload)
+      .then((summary) => sendResponse({ ok: true, summary }))
+      .catch((error) => {
+        chrome.storage.local.set({
+          lastGithubBackupStatus: {
+            ok: false,
+            at: new Date().toISOString(),
+            message: error instanceof Error ? error.message : "GitHub backup failed."
+          }
+        });
+        sendResponse({ ok: false, message: error instanceof Error ? error.message : "GitHub backup failed." });
+      });
+    return true;
+  }
+
+  if (message?.type === "GET_GITHUB_BACKUP_STATUS") {
+    chrome.storage.local.get(["lastGithubBackupStatus"], (data) => {
+      sendResponse({ ok: true, status: data.lastGithubBackupStatus || null });
+    });
+    return true;
+  }
+
+  if (message?.type === "GITHUB_OAUTH_DEVICE_START") {
+    const clientId = message?.payload?.clientId;
+    if (!clientId) {
+      sendResponse({ ok: false, message: "Missing client ID." });
+      return false;
+    }
+    startGithubDeviceFlow(clientId)
+      .then(async (flow) => {
+        try {
+          await chrome.tabs.create({ url: flow.verificationUri });
+        } catch (_error) {
+          // ignore
+        }
+        sendResponse({ ok: true, flowId: flow.id, userCode: flow.userCode, verificationUri: flow.verificationUri });
+      })
+      .catch((error) => sendResponse({ ok: false, message: error instanceof Error ? error.message : "Failed to start OAuth flow." }));
+    return true;
+  }
+
+  if (message?.type === "GITHUB_OAUTH_DEVICE_STATUS") {
+    const flowId = message?.payload?.flowId;
+    const flow = githubOAuthFlows.get(flowId);
+    if (!flow) {
+      sendResponse({ ok: false, message: "OAuth flow not found." });
+      return false;
+    }
+    pollGithubDeviceFlow(flow)
+      .then((next) => {
+        sendResponse({
+          ok: true,
+          state: next.state,
+          token: next.token || null,
+          message: next.message || null
+        });
+      })
+      .catch((error) => sendResponse({ ok: false, message: error instanceof Error ? error.message : "OAuth status failed." }));
     return true;
   }
 });

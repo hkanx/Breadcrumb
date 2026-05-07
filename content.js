@@ -67,6 +67,32 @@
     return normalizeWhitespace(lines.join("\n"));
   }
 
+  function formatReadableText(text) {
+    const source = normalizeWhitespace(text || "");
+    if (!source) {
+      return "";
+    }
+
+    const lines = source.split("\n").map((line) => line.trim()).filter(Boolean);
+    const output = [];
+    lines.forEach((line) => {
+      const chunks = line.length > 420
+        ? line.split(/(?<=[.!?])\s+(?=[A-Z0-9])/g).map((item) => item.trim()).filter(Boolean)
+        : [line];
+
+      chunks.forEach((chunk) => {
+        if (/^[-*•]\s+/.test(chunk) || /^\d+\.\s+/.test(chunk) || /:$/.test(chunk)) {
+          if (output.length && output[output.length - 1] !== "") {
+            output.push("");
+          }
+        }
+        output.push(chunk);
+      });
+    });
+
+    return output.join("\n").replace(/\n{3,}/g, "\n\n").trim();
+  }
+
   function removeNoise(root) {
     NOISE_SELECTORS.forEach((selector) => {
       root.querySelectorAll(selector).forEach((node) => node.remove());
@@ -221,7 +247,7 @@
 
     return {
       title: document.title || "Untitled Page",
-      cleanedText: extracted.text,
+      cleanedText: formatReadableText(extracted.text),
       confidence: extracted.confidence,
       sectionHints: SECTION_HINTS.filter((hint) => extracted.text.toLowerCase().includes(hint)),
       url: window.location.href

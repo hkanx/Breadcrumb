@@ -1,5 +1,6 @@
 const SCRAP_STATUS = ["saved", "applied", "interviewing", "offer", "rejected"];
 const THEME_KEY = "breadcrumb-vault-theme";
+const GITHUB_BACKUP_KEY = "githubBackupSettings";
 
 const state = {
   companies: [],
@@ -72,12 +73,19 @@ function toMarkdown(companyName, position) {
     }
     lines.push("");
     lines.push("```text");
-    lines.push((scrap.rawText || "").trim());
+    lines.push(formatReadableTextForView(scrap.rawText || ""));
     lines.push("```");
     lines.push("");
   });
 
   return lines.join("\n");
+}
+
+function formatReadableTextForView(rawText) {
+  if (window.BreadcrumbStorage?.formatReadableText) {
+    return window.BreadcrumbStorage.formatReadableText(rawText || "");
+  }
+  return String(rawText || "").trim();
 }
 
 function downloadTextFile(filename, content, type = "text/plain;charset=utf-8") {
@@ -90,6 +98,94 @@ function downloadTextFile(filename, content, type = "text/plain;charset=utf-8") 
   link.click();
   link.remove();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+function setGithubStatus(message, type = "") {
+  const statusEl = document.getElementById("gh-backup-status");
+  if (!statusEl) {
+    return;
+  }
+  statusEl.textContent = message;
+  statusEl.className = `status ${type}`.trim();
+}
+
+function getGithubConfigFromInputs() {
+  return {
+    clientId: document.getElementById("gh-client-id")?.value.trim() || "",
+    token: document.getElementById("gh-token")?.value.trim() || "",
+    owner: document.getElementById("gh-owner")?.value.trim() || "",
+    repo: document.getElementById("gh-repo")?.value.trim() || "",
+    branch: document.getElementById("gh-branch")?.value.trim() || "main"
+  };
+}
+
+async function loadGithubSettings() {
+  const data = await chrome.storage.local.get([GITHUB_BACKUP_KEY]);
+  const config = data?.[GITHUB_BACKUP_KEY] || {};
+  const tokenInput = document.getElementById("gh-token");
+  const clientIdInput = document.getElementById("gh-client-id");
+  const ownerInput = document.getElementById("gh-owner");
+  const repoInput = document.getElementById("gh-repo");
+  const branchInput = document.getElementById("gh-branch");
+
+  if (clientIdInput) {
+    clientIdInput.value = config.clientId || "";
+  }
+  if (tokenInput) {
+    tokenInput.value = config.token || "";
+  }
+  if (ownerInput) {
+    ownerInput.value = config.owner || "";
+  }
+  if (repoInput) {
+    repoInput.value = config.repo || "";
+  }
+  if (branchInput) {
+    branchInput.value = config.branch || "main";
+  }
+}
+
+async function runGithubOAuthConnect() {
+  const clientId = document.getElementById("gh-client-id")?.value.trim() || "";
+  if (!clientId) {
+    setGithubStatus("Enter GitHub OAuth App Client ID first.", "error");
+    return;
+  }
+
+  setGithubStatus("Starting GitHub OAuth device flow...", "");
+  const start = await chrome.runtime.sendMessage({ type: "GITHUB_OAUTH_DEVICE_START", payload: { clientId } });
+  if (!start?.ok) {
+    setGithubStatus(start?.message || "Failed to start OAuth.", "error");
+    return;
+  }
+
+  setGithubStatus(`Open GitHub and enter code: ${start.userCode}`, "");
+  const maxPolls = 120;
+  for (let i = 0; i < maxPolls; i += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 2500));
+    const status = await chrome.runtime.sendMessage({ type: "GITHUB_OAUTH_DEVICE_STATUS", payload: { flowId: start.flowId } });
+    if (!status?.ok) {
+      setGithubStatus(status?.message || "OAuth failed.", "error");
+      return;
+    }
+    if (status.state === "pending") {
+      continue;
+    }
+    if (status.state === "authorized") {
+      const tokenInput = document.getElementById("gh-token");
+      if (tokenInput) {
+        tokenInput.value = status.token || "";
+      }
+      const config = getGithubConfigFromInputs();
+      await chrome.storage.local.set({ [GITHUB_BACKUP_KEY]: config });
+      setGithubStatus("GitHub OAuth connected and token saved.", "success");
+      return;
+    }
+    setGithubStatus(status.message || "OAuth failed.", "error");
+    return;
+  }
+
+  setGithubStatus("OAuth timed out. Try again.", "error");
 }
 
 async function copyText(text) {
@@ -403,7 +499,7 @@ function createScrapView({ companyName, positionName, scrap }) {
   copyButton.textContent = "Copy Description";
   copyButton.disabled = isSaving;
   copyButton.addEventListener("click", async () => {
-    const summary = `${companyName} | ${positionName}\n${scrap.url || ""}\n${scrap.note || ""}\n\n${scrap.rawText || ""}`;
+    const summary = `${companyName} | ${positionName}\n${scrap.url || ""}\n${scrap.note || ""}\n\n${formatReadableTextForView(scrap.rawText || "")}`;
     await copyText(summary);
   });
 
@@ -416,10 +512,26 @@ function createScrapView({ companyName, positionName, scrap }) {
     tagLine.textContent = `Tags: ${(scrap.tags || []).join(", ") || "none"}`;
     item.append(tagLine);
 
-    const text = document.createElement("p");
+    const text = document.createElement("div");
     text.className = "scrap-text";
-    const shortened = (scrap.rawText || "").slice(0, 1600);
-    text.textContent = shortened + ((scrap.rawText || "").length > 1600 ? " ..." : "");
+    const readable = formatReadableTextForView(scrap.rawText || "");
+    const shortened = readable.slice(0, 1600);
+    const preview = shortened + (readable.length > 1600 ? " ..." : "");
+    const paragraphs = preview
+      .split(/\n{2,}/g)
+      .map((segment) => segment.trim())
+      .filter(Boolean);
+
+    if (paragraphs.length <= 1) {
+      text.textContent = preview;
+    } else {
+      paragraphs.forEach((paragraph) => {
+        const paragraphEl = document.createElement("p");
+        paragraphEl.className = "scrap-paragraph";
+        paragraphEl.textContent = paragraph;
+        text.append(paragraphEl);
+      });
+    }
     item.append(text);
 
     if (scrap.note) {
@@ -744,13 +856,73 @@ function wireToolbarActions() {
       window.alert("No visible scraps to export.");
       return;
     }
-    const lines = visible.map((entry) => `# ${entry.companyName} | ${entry.positionName}\n\n${entry.scrap.rawText || ""}\n`).join("\n");
+    const lines = visible
+      .map((entry) => `# ${entry.companyName} | ${entry.positionName}\n\n${formatReadableTextForView(entry.scrap.rawText || "")}\n`)
+      .join("\n");
     downloadTextFile("breadcrumb-visible-export.md", lines, "text/markdown;charset=utf-8");
   });
 
   document.getElementById("export-json")?.addEventListener("click", async () => {
     const payload = await window.BreadcrumbStorage.exportVaultJson();
     downloadTextFile("breadcrumb-vault.json", JSON.stringify(payload, null, 2), "application/json;charset=utf-8");
+  });
+
+  document.getElementById("export-backup-bundle")?.addEventListener("click", async () => {
+    const profile = window.confirm("Export full raw captures? Select Cancel for sanitized backup.") ? "full" : "sanitized";
+    const payload = await window.BreadcrumbStorage.exportBackupBundle({ profile });
+    const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+    downloadTextFile(`breadcrumb-backup-bundle-${profile}-${stamp}.json`, JSON.stringify(payload, null, 2), "application/json;charset=utf-8");
+  });
+
+  document.getElementById("gh-save-connection")?.addEventListener("click", async () => {
+    const config = getGithubConfigFromInputs();
+    if (!config.token || !config.owner || !config.repo) {
+      setGithubStatus("Token, owner, and repo are required.", "error");
+      return;
+    }
+    await chrome.storage.local.set({ [GITHUB_BACKUP_KEY]: config });
+    setGithubStatus("GitHub connection saved.", "success");
+  });
+
+  document.getElementById("gh-oauth-connect")?.addEventListener("click", async () => {
+    try {
+      await runGithubOAuthConnect();
+    } catch (error) {
+      setGithubStatus(error instanceof Error ? error.message : "OAuth failed.", "error");
+    }
+  });
+
+  document.getElementById("gh-clear-connection")?.addEventListener("click", async () => {
+    await chrome.storage.local.remove(GITHUB_BACKUP_KEY);
+    await loadGithubSettings();
+    setGithubStatus("GitHub connection removed.", "success");
+  });
+
+  document.getElementById("gh-backup-now")?.addEventListener("click", async () => {
+    try {
+      const config = getGithubConfigFromInputs();
+      if (!config.token || !config.owner || !config.repo) {
+        setGithubStatus("Save GitHub connection first.", "error");
+        return;
+      }
+
+      setGithubStatus("Running backup...", "");
+      const bundle = await window.BreadcrumbStorage.exportBackupBundle({ profile: "sanitized" });
+      const response = await chrome.runtime.sendMessage({
+        type: "GITHUB_BACKUP_UPSERT",
+        payload: { config, bundle }
+      });
+
+      if (!response?.ok) {
+        setGithubStatus(response?.message || "Backup failed.", "error");
+        return;
+      }
+
+      const s = response.summary || { created: 0, updated: 0, unchanged: 0, deleted: 0 };
+      setGithubStatus(`Backup complete: ${s.updated} updated, ${s.created} created, ${s.unchanged} unchanged, ${s.deleted} deleted.`, "success");
+    } catch (error) {
+      setGithubStatus(error instanceof Error ? error.message : "Backup failed.", "error");
+    }
   });
 
   document.getElementById("import-json")?.addEventListener("change", async (event) => {
@@ -807,6 +979,20 @@ document.addEventListener("DOMContentLoaded", async () => {
   });
 
   wireToolbarActions();
+  await loadGithubSettings();
+  try {
+    const statusResp = await chrome.runtime.sendMessage({ type: "GET_GITHUB_BACKUP_STATUS" });
+    if (statusResp?.ok && statusResp.status) {
+      if (statusResp.status.ok) {
+        const s = statusResp.status.summary || { created: 0, updated: 0, unchanged: 0, deleted: 0 };
+        setGithubStatus(`Last backup: ${s.updated} updated, ${s.created} created, ${s.unchanged} unchanged.`, "success");
+      } else {
+        setGithubStatus(statusResp.status.message || "Last backup failed.", "error");
+      }
+    }
+  } catch (_error) {
+    // ignore
+  }
 
   try {
     await loadCompanies();
