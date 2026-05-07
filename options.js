@@ -130,6 +130,25 @@ function setReminderStatus(message, type = "") {
   statusEl.className = `status ${type}`.trim();
 }
 
+function getRuntimeConnectionError() {
+  return "Extension connection is unavailable. Reload Breadcrumb in chrome://extensions, then open the extension Options page (not file://options.html).";
+}
+
+async function sendRuntimeMessageSafe(message) {
+  if (!chrome?.runtime?.id) {
+    throw new Error(getRuntimeConnectionError());
+  }
+  try {
+    return await chrome.runtime.sendMessage(message);
+  } catch (error) {
+    const text = error instanceof Error ? error.message : String(error || "");
+    if (text.includes("Could not establish connection") || text.includes("Receiving end does not exist")) {
+      throw new Error(getRuntimeConnectionError());
+    }
+    throw error instanceof Error ? error : new Error(text || "Failed to reach extension background service worker.");
+  }
+}
+
 function getReminderInputs() {
   const enabled = Boolean(document.getElementById("reminder-enabled")?.checked);
   const testMode = Boolean(document.getElementById("reminder-test-mode")?.checked);
@@ -194,7 +213,7 @@ function applyReminderSettingsToForm(settings) {
 }
 
 async function refreshReminderSettings() {
-  const response = await chrome.runtime.sendMessage({ type: "REMINDER_SETTINGS_GET" });
+  const response = await sendRuntimeMessageSafe({ type: "REMINDER_SETTINGS_GET" });
   if (!response?.ok) {
     throw new Error(response?.message || "Unable to load reminder settings.");
   }
@@ -1118,7 +1137,7 @@ function wireReminderActions() {
   document.getElementById("reminder-save")?.addEventListener("click", async () => {
     try {
       const next = getReminderInputs();
-      const response = await chrome.runtime.sendMessage({ type: "REMINDER_SETTINGS_SET", payload: next });
+      const response = await sendRuntimeMessageSafe({ type: "REMINDER_SETTINGS_SET", payload: next });
       if (!response?.ok) {
         setReminderStatus(response?.message || "Failed to save reminder settings.", "error");
         return;
@@ -1132,7 +1151,7 @@ function wireReminderActions() {
 
   document.getElementById("reminder-preview")?.addEventListener("click", async () => {
     try {
-      const response = await chrome.runtime.sendMessage({ type: "REMINDER_PREVIEW_GET", payload: { isTest: true } });
+      const response = await sendRuntimeMessageSafe({ type: "REMINDER_PREVIEW_GET", payload: { isTest: true } });
       if (!response?.ok) {
         setReminderStatus(response?.message || "Failed to preview reminder.", "error");
         return;
@@ -1146,7 +1165,7 @@ function wireReminderActions() {
 
   document.getElementById("reminder-test-send")?.addEventListener("click", async () => {
     try {
-      const response = await chrome.runtime.sendMessage({ type: "REMINDER_TEST_SEND" });
+      const response = await sendRuntimeMessageSafe({ type: "REMINDER_TEST_SEND" });
       if (!response?.ok) {
         setReminderStatus(response?.message || "Failed to send test reminder.", "error");
         return;
