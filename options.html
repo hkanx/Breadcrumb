@@ -106,6 +106,47 @@
           </div>
         </details>
 
+        <details class="toolbar-card controls-foldout reminder-panel" aria-label="Reminders">
+          <summary>Reminders</summary>
+          <div class="foldout-body">
+            <div class="velocity-header">
+              <p class="eyebrow">Reminders</p>
+              <p id="reminder-summary" class="velocity-summary">Loading...</p>
+            </div>
+            <div class="github-fields reminder-fields">
+              <label class="field-inline">
+                <span>Enabled</span>
+                <input id="reminder-enabled" type="checkbox" />
+              </label>
+              <label class="field-inline">
+                <span>Test Mode</span>
+                <input id="reminder-test-mode" type="checkbox" />
+              </label>
+              <label class="field-inline">
+                <span>Mode</span>
+                <select id="reminder-mode">
+                  <option value="timesPerDay">Times per day</option>
+                  <option value="everyNDays">Every N days</option>
+                </select>
+              </label>
+              <label class="field-inline">
+                <span>Times/day</span>
+                <input id="reminder-times-per-day" type="number" min="1" max="24" value="2" />
+              </label>
+              <label class="field-inline">
+                <span>Every N days</span>
+                <input id="reminder-every-n-days" type="number" min="1" max="90" value="7" />
+              </label>
+            </div>
+            <div class="position-actions">
+              <button id="reminder-save" class="btn-secondary" type="button">Save Reminder Settings</button>
+              <button id="reminder-preview" class="btn-secondary" type="button">Preview Reminder Content</button>
+              <button id="reminder-test-send" class="btn-primary" type="button">Send Test Reminder</button>
+            </div>
+            <p id="reminder-status" class="status" aria-live="polite"></p>
+          </div>
+        </details>
+
         <section class="velocity-card" aria-label="Daily application velocity">
           <div class="velocity-header">
             <p class="eyebrow">Velocity</p>

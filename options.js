@@ -2,6 +2,16 @@ const SCRAP_STATUS = ["saved", "applied", "interviewing", "offer", "rejected"];
 const THEME_KEY = "breadcrumb-vault-theme";
 const GITHUB_BACKUP_KEY = "githubBackupSettings";
 const GITHUB_OAUTH_TOKEN_KEY = "githubOAuthToken";
+const REMINDER_DEFAULTS = {
+  enabled: false,
+  mode: "timesPerDay",
+  timesPerDay: 2,
+  everyNDays: 7,
+  scope: "applied_interviewing",
+  testMode: false,
+  lastSentAt: null,
+  lastTestSentAt: null
+};
 
 const state = {
   companies: [],
@@ -16,7 +26,8 @@ const state = {
   diagnostics: {
     lastStatus: null,
     lastDraft: null
-  }
+  },
+  reminderSettings: { ...REMINDER_DEFAULTS }
 };
 
 function formatDate(isoDate) {
@@ -108,6 +119,113 @@ function setGithubStatus(message, type = "") {
   }
   statusEl.textContent = message;
   statusEl.className = `status ${type}`.trim();
+}
+
+function setReminderStatus(message, type = "") {
+  const statusEl = document.getElementById("reminder-status");
+  if (!statusEl) {
+    return;
+  }
+  statusEl.textContent = message;
+  statusEl.className = `status ${type}`.trim();
+}
+
+function getRuntimeConnectionError() {
+  return "Extension connection is unavailable. Reload Breadcrumb in chrome://extensions, then open the extension Options page (not file://options.html).";
+}
+
+async function sendRuntimeMessageSafe(message) {
+  if (!chrome?.runtime?.id) {
+    throw new Error(getRuntimeConnectionError());
+  }
+  try {
+    return await chrome.runtime.sendMessage(message);
+  } catch (error) {
+    const text = error instanceof Error ? error.message : String(error || "");
+    if (text.includes("Could not establish connection") || text.includes("Receiving end does not exist")) {
+      throw new Error(getRuntimeConnectionError());
+    }
+    throw error instanceof Error ? error : new Error(text || "Failed to reach extension background service worker.");
+  }
+}
+
+function getReminderInputs() {
+  const enabled = Boolean(document.getElementById("reminder-enabled")?.checked);
+  const testMode = Boolean(document.getElementById("reminder-test-mode")?.checked);
+  const mode = document.getElementById("reminder-mode")?.value === "everyNDays" ? "everyNDays" : "timesPerDay";
+  const timesPerDay = Number.parseInt(document.getElementById("reminder-times-per-day")?.value || "2", 10);
+  const everyNDays = Number.parseInt(document.getElementById("reminder-every-n-days")?.value || "7", 10);
+  return {
+    ...state.reminderSettings,
+    enabled,
+    testMode,
+    mode,
+    timesPerDay: Number.isFinite(timesPerDay) ? timesPerDay : 2,
+    everyNDays: Number.isFinite(everyNDays) ? everyNDays : 7
+  };
+}
+
+function syncReminderModeInputs(mode) {
+  const timesInput = document.getElementById("reminder-times-per-day");
+  const daysInput = document.getElementById("reminder-every-n-days");
+  if (!timesInput || !daysInput) {
+    return;
+  }
+  const useDaily = mode !== "everyNDays";
+  timesInput.disabled = !useDaily;
+  daysInput.disabled = useDaily;
+}
+
+function applyReminderSettingsToForm(settings) {
+  state.reminderSettings = { ...REMINDER_DEFAULTS, ...(settings || {}) };
+  const cfg = state.reminderSettings;
+  const enabled = document.getElementById("reminder-enabled");
+  const testMode = document.getElementById("reminder-test-mode");
+  const mode = document.getElementById("reminder-mode");
+  const times = document.getElementById("reminder-times-per-day");
+  const days = document.getElementById("reminder-every-n-days");
+  const summary = document.getElementById("reminder-summary");
+
+  if (enabled) {
+    enabled.checked = Boolean(cfg.enabled);
+  }
+  if (testMode) {
+    testMode.checked = Boolean(cfg.testMode);
+  }
+  if (mode) {
+    mode.value = cfg.mode === "everyNDays" ? "everyNDays" : "timesPerDay";
+  }
+  if (times) {
+    times.value = String(cfg.timesPerDay || 2);
+  }
+  if (days) {
+    days.value = String(cfg.everyNDays || 7);
+  }
+
+  syncReminderModeInputs(cfg.mode);
+
+  if (summary) {
+    const cadence = cfg.mode === "everyNDays" ? `every ${cfg.everyNDays} day(s)` : `${cfg.timesPerDay} time(s)/day`;
+    const lastLive = cfg.lastSentAt ? `Last live: ${formatDate(cfg.lastSentAt)}` : "Last live: none";
+    const lastTest = cfg.lastTestSentAt ? `Last test: ${formatDate(cfg.lastTestSentAt)}` : "Last test: none";
+    summary.textContent = `${cfg.enabled ? "On" : "Off"} | ${cadence} | Scope: applied+interviewing | Test Mode: ${cfg.testMode ? "On" : "Off"} | ${lastLive} | ${lastTest}`;
+  }
+}
+
+async function refreshReminderSettings() {
+  const response = await sendRuntimeMessageSafe({ type: "REMINDER_SETTINGS_GET" });
+  if (!response?.ok) {
+    throw new Error(response?.message || "Unable to load reminder settings.");
+  }
+  applyReminderSettingsToForm(response.settings || REMINDER_DEFAULTS);
+}
+
+function formatReminderPreview(preview) {
+  if (!preview) {
+    return "No reminder preview available.";
+  }
+  const marker = preview.title || "Reminder";
+  return `${marker}\n${preview.message || ""}`.trim();
 }
 
 function setDeviceCode(code) {
@@ -1011,6 +1129,57 @@ function wireToolbarActions() {
   });
 }
 
+function wireReminderActions() {
+  document.getElementById("reminder-mode")?.addEventListener("change", (event) => {
+    syncReminderModeInputs(event.target.value);
+  });
+
+  document.getElementById("reminder-save")?.addEventListener("click", async () => {
+    try {
+      const next = getReminderInputs();
+      const response = await sendRuntimeMessageSafe({ type: "REMINDER_SETTINGS_SET", payload: next });
+      if (!response?.ok) {
+        setReminderStatus(response?.message || "Failed to save reminder settings.", "error");
+        return;
+      }
+      applyReminderSettingsToForm(response.settings || next);
+      setReminderStatus("Reminder settings saved.", "success");
+    } catch (error) {
+      setReminderStatus(error instanceof Error ? error.message : "Failed to save reminder settings.", "error");
+    }
+  });
+
+  document.getElementById("reminder-preview")?.addEventListener("click", async () => {
+    try {
+      const response = await sendRuntimeMessageSafe({ type: "REMINDER_PREVIEW_GET", payload: { isTest: true } });
+      if (!response?.ok) {
+        setReminderStatus(response?.message || "Failed to preview reminder.", "error");
+        return;
+      }
+      const previewText = formatReminderPreview(response.preview);
+      setReminderStatus(previewText, "success");
+    } catch (error) {
+      setReminderStatus(error instanceof Error ? error.message : "Failed to preview reminder.", "error");
+    }
+  });
+
+  document.getElementById("reminder-test-send")?.addEventListener("click", async () => {
+    try {
+      const response = await sendRuntimeMessageSafe({ type: "REMINDER_TEST_SEND" });
+      if (!response?.ok) {
+        setReminderStatus(response?.message || "Failed to send test reminder.", "error");
+        return;
+      }
+      const preview = response.result?.preview;
+      const text = preview ? `Test reminder sent. ${preview.title}` : "Test reminder sent.";
+      setReminderStatus(text, "success");
+      await refreshReminderSettings();
+    } catch (error) {
+      setReminderStatus(error instanceof Error ? error.message : "Failed to send test reminder.", "error");
+    }
+  });
+}
+
 document.addEventListener("DOMContentLoaded", async () => {
   const savedTheme = localStorage.getItem(THEME_KEY) || "light";
   applyTheme(savedTheme);
@@ -1045,7 +1214,13 @@ document.addEventListener("DOMContentLoaded", async () => {
   });
 
   wireToolbarActions();
+  wireReminderActions();
   await loadGithubSettings();
+  try {
+    await refreshReminderSettings();
+  } catch (error) {
+    setReminderStatus(error instanceof Error ? error.message : "Unable to load reminder settings.", "error");
+  }
   try {
     const statusResp = await chrome.runtime.sendMessage({ type: "GET_GITHUB_BACKUP_STATUS" });
     if (statusResp?.ok && statusResp.status) {
