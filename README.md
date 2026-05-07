@@ -1,4 +1,4 @@
-# Breadcrumb
+# Breadcrumb 🍞
 
 Breadcrumb is a Chrome extension for capturing, organizing, and revisiting web content from any page.
 
@@ -35,6 +35,7 @@ Breadcrumb bridges those two modes by making capture lightweight and retrieval s
 - Bulk actions for visible/filtered records.
 - Export to Markdown and full JSON backup/import.
 - Export backup bundles for private GitHub archival workflows.
+- Direct private GitHub backup from Vault (token or GitHub OAuth device flow).
 - Side Panel support for in-context review.
 
 ## Technical Decisions and System Design
@@ -73,7 +74,7 @@ Scrap metadata includes:
 
 - `timestamp`, `url`, `rawText`, `note`
 - `status`, `tags`, `favorite`
-- `confidence`, `captureSource`, `schemaVersion`, `captureCount`
+- `confidence`, `captureSource`, `schemaVersion`, `captureCount`, `backupId`
 
 **Decision:** Explicit metadata instead of free-form blobs.  
 **Result:** Enables filtering, bulk operations, diagnostics, and safe schema evolution.
@@ -110,6 +111,18 @@ Scrap metadata includes:
 **Why:** Keep production data local while enabling auditable private GitHub backups.  
 **Implementation:** Companion script materializes bundle files in a private repo and commits/pushes via local git auth, using persistent `backupId` upserts to edit-in-place without duplicate records.
 
+### 10) Direct GitHub Backup in Extension
+
+**Decision:** Support direct `Backup to GitHub Now` from Vault (without manual bundle apply).  
+**Why:** Reduce backup friction and avoid requiring separate terminal steps for routine syncs.  
+**Implementation:** Background service worker writes to GitHub Contents API and records `created/updated/unchanged/deleted` summary, plus latest commit SHA for verification.
+
+### 11) OAuth Reliability in MV3 Service Worker Lifecycle
+
+**Decision:** Persist GitHub OAuth device-flow state in `chrome.storage.local`.  
+**Why:** MV3 service workers can sleep/reset mid-flow; in-memory-only auth state is unreliable.  
+**Implementation:** Store active device flow + recovered poll state so OAuth completion survives worker restarts.
+
 ## End-to-End Flow
 
 1. User triggers capture (shortcut/icon/popup).
@@ -135,6 +148,7 @@ Breadcrumb is local-first:
 - Backup/restore via JSON export/import.
 - Optional private-repo backups via export bundle + local script.
 - Optional direct private-repo backup from Vault via GitHub token + repo settings.
+- Optional GitHub OAuth device flow for direct backup auth.
 
 ## Install (Unpacked)
 
