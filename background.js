@@ -575,8 +575,22 @@ async function runGithubBackupUpsert(payload) {
     await putGithubFile(config, path, content, commitMessage);
   }
 
-  await chrome.storage.local.set({ lastGithubBackupStatus: { ok: true, at: new Date().toISOString(), summary, repo: `${config.owner}/${config.repo}`, branch: config.branch || "main" } });
-  return summary;
+  const backupStatus = {
+    ok: true,
+    at: new Date().toISOString(),
+    summary,
+    repo: `${config.owner}/${config.repo}`,
+    branch: config.branch || "main"
+  };
+  const latestCommitResp = await githubRequest({
+    endpoint: `/repos/${encodeURIComponent(config.owner)}/${encodeURIComponent(config.repo)}/commits/${encodeURIComponent(config.branch || "main")}`,
+    token: config.token
+  });
+  backupStatus.latestCommitSha = latestCommitResp?.data?.sha || null;
+  backupStatus.latestCommitDate = latestCommitResp?.data?.commit?.author?.date || null;
+
+  await chrome.storage.local.set({ lastGithubBackupStatus: backupStatus });
+  return backupStatus;
 }
 
 async function githubDeviceRequest(endpoint, body) {
@@ -729,7 +743,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
   if (message?.type === "GITHUB_BACKUP_UPSERT") {
     runGithubBackupUpsert(message.payload)
-      .then((summary) => sendResponse({ ok: true, summary }))
+      .then((status) => sendResponse({ ok: true, status, summary: status.summary, repo: status.repo, branch: status.branch }))
       .catch((error) => {
         chrome.storage.local.set({
           lastGithubBackupStatus: {

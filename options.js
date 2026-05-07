@@ -919,7 +919,10 @@ function wireToolbarActions() {
       }
 
       const s = response.summary || { created: 0, updated: 0, unchanged: 0, deleted: 0 };
-      setGithubStatus(`Backup complete: ${s.updated} updated, ${s.created} created, ${s.unchanged} unchanged, ${s.deleted} deleted.`, "success");
+      const repo = response.repo || `${config.owner}/${config.repo}`;
+      const branch = response.branch || config.branch || "main";
+      const sha = response.status?.latestCommitSha ? String(response.status.latestCommitSha).slice(0, 7) : "unknown";
+      setGithubStatus(`Backup complete to ${repo}@${branch}: ${s.updated} updated, ${s.created} created, ${s.unchanged} unchanged, ${s.deleted} deleted. Latest commit: ${sha}`, "success");
     } catch (error) {
       setGithubStatus(error instanceof Error ? error.message : "Backup failed.", "error");
     }
@@ -985,7 +988,10 @@ document.addEventListener("DOMContentLoaded", async () => {
     if (statusResp?.ok && statusResp.status) {
       if (statusResp.status.ok) {
         const s = statusResp.status.summary || { created: 0, updated: 0, unchanged: 0, deleted: 0 };
-        setGithubStatus(`Last backup: ${s.updated} updated, ${s.created} created, ${s.unchanged} unchanged.`, "success");
+        const repo = statusResp.status.repo || "unknown-repo";
+        const branch = statusResp.status.branch || "main";
+        const sha = statusResp.status.latestCommitSha ? String(statusResp.status.latestCommitSha).slice(0, 7) : "unknown";
+        setGithubStatus(`Last backup to ${repo}@${branch}: ${s.updated} updated, ${s.created} created, ${s.unchanged} unchanged. Latest commit: ${sha}`, "success");
       } else {
         setGithubStatus(statusResp.status.message || "Last backup failed.", "error");
       }
