@@ -758,6 +758,10 @@ textarea:focus,
   .vault-main {
     min-height: auto;
   }
+
+  .reminder-fields {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -821,6 +825,22 @@ textarea:focus,
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 6px;
+}
+
+.reminder-fields {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.field-inline {
+  display: grid;
+  gap: 4px;
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
+.field-inline input[type="checkbox"] {
+  width: 18px;
+  height: 18px;
 }
 
 .gh-device-code-box {

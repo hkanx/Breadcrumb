@@ -8,6 +8,10 @@ let dbPromise = null;
 const githubOAuthFlows = new Map();
 const GITHUB_OAUTH_FLOW_KEY = "githubOAuthDeviceFlow";
 const GITHUB_OAUTH_TOKEN_KEY = "githubOAuthToken";
+const REMINDER_SETTINGS_KEY = "reminderSettings";
+const REMINDER_ALARM_NAME = "breadcrumbReminderAlarm";
+const REMINDER_NOTIFICATION_PREFIX = "breadcrumb-reminder";
+const REMINDER_EMOJIS = ["✨", "🍞", "🥖", "🥐", "🐈", "🥯"];
 
 function normalizeTags(tags) {
   if (!Array.isArray(tags)) {
@@ -91,6 +95,190 @@ function guessPositionFromTitle(title) {
     }
   });
   return best.slice(0, 140) || "General Role";
+}
+
+function defaultReminderSettings() {
+  return {
+    enabled: false,
+    mode: "timesPerDay",
+    timesPerDay: 2,
+    everyNDays: 7,
+    scope: "applied_interviewing",
+    testMode: false,
+    lastSentAt: null,
+    lastTestSentAt: null
+  };
+}
+
+function normalizeReminderSettings(input) {
+  const base = defaultReminderSettings();
+  const safe = input && typeof input === "object" ? input : {};
+  const mode = safe.mode === "everyNDays" ? "everyNDays" : "timesPerDay";
+  const timesPerDay = Math.min(24, Math.max(1, Number.parseInt(String(safe.timesPerDay ?? base.timesPerDay), 10) || base.timesPerDay));
+  const everyNDays = Math.min(90, Math.max(1, Number.parseInt(String(safe.everyNDays ?? base.everyNDays), 10) || base.everyNDays));
+  return {
+    ...base,
+    ...safe,
+    mode,
+    timesPerDay,
+    everyNDays,
+    scope: safe.scope === "all" ? "all" : safe.scope === "favorite" ? "favorite" : "applied_interviewing",
+    testMode: Boolean(safe.testMode),
+    enabled: Boolean(safe.enabled)
+  };
+}
+
+async function getReminderSettings() {
+  const data = await chrome.storage.local.get([REMINDER_SETTINGS_KEY]);
+  return normalizeReminderSettings(data?.[REMINDER_SETTINGS_KEY]);
+}
+
+async function setReminderSettings(patch) {
+  const current = await getReminderSettings();
+  const next = normalizeReminderSettings({ ...current, ...(patch || {}) });
+  await chrome.storage.local.set({ [REMINDER_SETTINGS_KEY]: next });
+  await ensureReminderAlarm(next);
+  return next;
+}
+
+async function patchReminderTimestamps(patch) {
+  const current = await getReminderSettings();
+  const next = normalizeReminderSettings({ ...current, ...(patch || {}) });
+  await chrome.storage.local.set({ [REMINDER_SETTINGS_KEY]: next });
+  return next;
+}
+
+function reminderPeriodMinutes(settings) {
+  if (settings.mode === "everyNDays") {
+    return settings.everyNDays * 24 * 60;
+  }
+  const interval = (24 * 60) / settings.timesPerDay;
+  return Math.max(60, Math.round(interval));
+}
+
+async function ensureReminderAlarm(settings) {
+  const cfg = settings || (await getReminderSettings());
+  await chrome.alarms.clear(REMINDER_ALARM_NAME);
+  if (!cfg.enabled) {
+    return;
+  }
+  const periodInMinutes = reminderPeriodMinutes(cfg);
+  await chrome.alarms.create(REMINDER_ALARM_NAME, {
+    delayInMinutes: 1,
+    periodInMinutes
+  });
+}
+
+function reminderScopeMatches(scrap, settings) {
+  const status = String(scrap.status || "saved");
+  if (settings.scope === "all") {
+    return true;
+  }
+  if (settings.scope === "favorite") {
+    return Boolean(scrap.favorite);
+  }
+  return status === "applied" || status === "interviewing";
+}
+
+async function getReminderCandidates(settings) {
+  const db = await openDb();
+  const companies = await new Promise((resolve, reject) => {
+    const tx = db.transaction(STORE_NAME, "readonly");
+    const store = tx.objectStore(STORE_NAME);
+    const req = store.getAll();
+    req.onsuccess = () => resolve(Array.isArray(req.result) ? req.result : []);
+    req.onerror = () => reject(new Error(`Reminder read failed: ${req.error?.message || "Unknown error"}`));
+  });
+
+  const results = [];
+  companies.forEach((company) => {
+    (company.positions || []).forEach((position) => {
+      (position.scraps || []).forEach((scrap) => {
+        const normalized = normalizeScrap(scrap);
+        if (!reminderScopeMatches(normalized, settings)) {
+          return;
+        }
+        results.push({
+          company: company.name || "Unknown Company",
+          position: position.name || "Untitled Position",
+          timestamp: normalized.timestamp,
+          status: normalized.status
+        });
+      });
+    });
+  });
+
+  results.sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
+  return results;
+}
+
+function humanAgeDays(isoDate) {
+  const then = new Date(isoDate);
+  if (Number.isNaN(then.getTime())) {
+    return "unknown age";
+  }
+  const now = new Date();
+  const days = Math.max(0, Math.floor((now.getTime() - then.getTime()) / (24 * 60 * 60 * 1000)));
+  return days === 0 ? "today" : `${days}d ago`;
+}
+
+async function buildReminderPreview({ isTest = false } = {}) {
+  const settings = await getReminderSettings();
+  const candidates = await getReminderCandidates(settings);
+  const top = candidates.slice(0, 3);
+  const lines = top.map((item) => `${item.company} | ${item.position} (${humanAgeDays(item.timestamp)})`);
+
+  if (!lines.length && settings.testMode) {
+    lines.push("Sample Company | Recruiter Follow-up (2d ago)");
+  }
+
+  const isMock = lines.length === 0;
+  const titlePrefix = isTest || settings.testMode ? "[TEST] " : "";
+  const title = `${titlePrefix}Breadcrumb Reminder`;
+  const message = isMock
+    ? "No matching applied/interviewing records right now."
+    : `Time to apply/follow-up:\n${lines.join("\n")}`;
+
+  return {
+    title,
+    message,
+    isMock,
+    candidateCount: top.length,
+    settings
+  };
+}
+
+async function sendReminderNotification({ isTest = false } = {}) {
+  const preview = await buildReminderPreview({ isTest });
+  const settings = preview.settings || (await getReminderSettings());
+  if (!isTest && settings.lastSentAt) {
+    const elapsedMs = Date.now() - new Date(settings.lastSentAt).getTime();
+    const cooldownMs = Math.max(30 * 60 * 1000, reminderPeriodMinutes(settings) * 60 * 1000 * 0.5);
+    if (Number.isFinite(elapsedMs) && elapsedMs > 0 && elapsedMs < cooldownMs) {
+      return { sent: false, reason: "Reminder cooldown active.", preview };
+    }
+  }
+  if (!isTest && preview.isMock && !preview.settings.testMode) {
+    return { sent: false, reason: "No matching reminder candidates." };
+  }
+
+  const now = Date.now();
+  const emoji = REMINDER_EMOJIS[Math.floor(now / 1000) % REMINDER_EMOJIS.length];
+  const id = `${REMINDER_NOTIFICATION_PREFIX}-${isTest ? "test" : "live"}-${now}`;
+  await chrome.notifications.create(id, {
+    type: "basic",
+    iconUrl: "assets/icon-48.png",
+    title: `${emoji} ${preview.title}`,
+    message: preview.message
+  });
+
+  if (isTest) {
+    await patchReminderTimestamps({ lastTestSentAt: new Date().toISOString() });
+  } else {
+    await patchReminderTimestamps({ lastSentAt: new Date().toISOString() });
+  }
+
+  return { sent: true, preview };
 }
 
 function openDb() {
@@ -720,6 +908,33 @@ chrome.commands.onCommand.addListener(async (command) => {
   await runShortcutAutoCapture();
 });
 
+chrome.runtime.onInstalled.addListener(() => {
+  getReminderSettings()
+    .then((settings) => ensureReminderAlarm(settings))
+    .catch(() => {});
+});
+
+chrome.runtime.onStartup.addListener(() => {
+  getReminderSettings()
+    .then((settings) => ensureReminderAlarm(settings))
+    .catch(() => {});
+});
+
+chrome.alarms.onAlarm.addListener((alarm) => {
+  if (alarm?.name !== REMINDER_ALARM_NAME) {
+    return;
+  }
+  sendReminderNotification({ isTest: false }).catch(() => {});
+});
+
+chrome.notifications.onClicked.addListener((notificationId) => {
+  if (!notificationId.startsWith(REMINDER_NOTIFICATION_PREFIX)) {
+    return;
+  }
+  chrome.runtime.openOptionsPage(() => {});
+  chrome.notifications.clear(notificationId, () => {});
+});
+
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message?.type === "CAPTURE_ACTIVE_TAB") {
     chrome.tabs.query({ active: true, currentWindow: true }, async (tabs) => {
@@ -783,6 +998,34 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     chrome.storage.local.get(["lastGithubBackupStatus"], (data) => {
       sendResponse({ ok: true, status: data.lastGithubBackupStatus || null });
     });
+    return true;
+  }
+
+  if (message?.type === "REMINDER_SETTINGS_GET") {
+    getReminderSettings()
+      .then((settings) => sendResponse({ ok: true, settings }))
+      .catch((error) => sendResponse({ ok: false, message: error instanceof Error ? error.message : "Failed to load reminder settings." }));
+    return true;
+  }
+
+  if (message?.type === "REMINDER_SETTINGS_SET") {
+    setReminderSettings(message?.payload || {})
+      .then((settings) => sendResponse({ ok: true, settings }))
+      .catch((error) => sendResponse({ ok: false, message: error instanceof Error ? error.message : "Failed to save reminder settings." }));
+    return true;
+  }
+
+  if (message?.type === "REMINDER_PREVIEW_GET") {
+    buildReminderPreview({ isTest: Boolean(message?.payload?.isTest) })
+      .then((preview) => sendResponse({ ok: true, preview }))
+      .catch((error) => sendResponse({ ok: false, message: error instanceof Error ? error.message : "Failed to build reminder preview." }));
+    return true;
+  }
+
+  if (message?.type === "REMINDER_TEST_SEND") {
+    sendReminderNotification({ isTest: true })
+      .then((result) => sendResponse({ ok: true, result }))
+      .catch((error) => sendResponse({ ok: false, message: error instanceof Error ? error.message : "Failed to send test reminder." }));
     return true;
   }
 
