@@ -1,6 +1,7 @@
 const SCRAP_STATUS = ["saved", "applied", "interviewing", "offer", "rejected"];
 const THEME_KEY = "breadcrumb-vault-theme";
 const GITHUB_BACKUP_KEY = "githubBackupSettings";
+const GITHUB_OAUTH_TOKEN_KEY = "githubOAuthToken";
 
 const state = {
   companies: [],
@@ -109,6 +110,21 @@ function setGithubStatus(message, type = "") {
   statusEl.className = `status ${type}`.trim();
 }
 
+function setDeviceCode(code) {
+  const box = document.getElementById("gh-device-code-box");
+  const value = document.getElementById("gh-device-code-value");
+  if (!box || !value) {
+    return;
+  }
+  if (!code) {
+    box.hidden = true;
+    value.textContent = "";
+    return;
+  }
+  value.textContent = code;
+  box.hidden = false;
+}
+
 function getGithubConfigFromInputs() {
   return {
     clientId: document.getElementById("gh-client-id")?.value.trim() || "",
@@ -120,8 +136,9 @@ function getGithubConfigFromInputs() {
 }
 
 async function loadGithubSettings() {
-  const data = await chrome.storage.local.get([GITHUB_BACKUP_KEY]);
+  const data = await chrome.storage.local.get([GITHUB_BACKUP_KEY, GITHUB_OAUTH_TOKEN_KEY]);
   const config = data?.[GITHUB_BACKUP_KEY] || {};
+  const oauthToken = data?.[GITHUB_OAUTH_TOKEN_KEY] || "";
   const tokenInput = document.getElementById("gh-token");
   const clientIdInput = document.getElementById("gh-client-id");
   const ownerInput = document.getElementById("gh-owner");
@@ -132,7 +149,7 @@ async function loadGithubSettings() {
     clientIdInput.value = config.clientId || "";
   }
   if (tokenInput) {
-    tokenInput.value = config.token || "";
+    tokenInput.value = config.token || oauthToken || "";
   }
   if (ownerInput) {
     ownerInput.value = config.owner || "";
@@ -143,6 +160,23 @@ async function loadGithubSettings() {
   if (branchInput) {
     branchInput.value = config.branch || "main";
   }
+}
+
+async function resolveGithubConfigForBackup() {
+  const config = getGithubConfigFromInputs();
+  if (config.token) {
+    return config;
+  }
+  const data = await chrome.storage.local.get([GITHUB_OAUTH_TOKEN_KEY, GITHUB_BACKUP_KEY]);
+  const oauthToken = data?.[GITHUB_OAUTH_TOKEN_KEY] || "";
+  const saved = data?.[GITHUB_BACKUP_KEY] || {};
+  return {
+    clientId: config.clientId || saved.clientId || "",
+    token: oauthToken || saved.token || "",
+    owner: config.owner || saved.owner || "",
+    repo: config.repo || saved.repo || "",
+    branch: config.branch || saved.branch || "main"
+  };
 }
 
 async function runGithubOAuthConnect() {
@@ -156,9 +190,11 @@ async function runGithubOAuthConnect() {
   const start = await chrome.runtime.sendMessage({ type: "GITHUB_OAUTH_DEVICE_START", payload: { clientId } });
   if (!start?.ok) {
     setGithubStatus(start?.message || "Failed to start OAuth.", "error");
+    setDeviceCode("");
     return;
   }
 
+  setDeviceCode(start.userCode || "");
   setGithubStatus(`Open GitHub and enter code: ${start.userCode}`, "");
   const maxPolls = 120;
   for (let i = 0; i < maxPolls; i += 1) {
@@ -166,6 +202,7 @@ async function runGithubOAuthConnect() {
     const status = await chrome.runtime.sendMessage({ type: "GITHUB_OAUTH_DEVICE_STATUS", payload: { flowId: start.flowId } });
     if (!status?.ok) {
       setGithubStatus(status?.message || "OAuth failed.", "error");
+      setDeviceCode(start.userCode || "");
       return;
     }
     if (status.state === "pending") {
@@ -176,16 +213,20 @@ async function runGithubOAuthConnect() {
       if (tokenInput) {
         tokenInput.value = status.token || "";
       }
+      await chrome.storage.local.set({ [GITHUB_OAUTH_TOKEN_KEY]: status.token || "" });
       const config = getGithubConfigFromInputs();
       await chrome.storage.local.set({ [GITHUB_BACKUP_KEY]: config });
       setGithubStatus("GitHub OAuth connected and token saved.", "success");
+      setDeviceCode("");
       return;
     }
     setGithubStatus(status.message || "OAuth failed.", "error");
+    setDeviceCode(start.userCode || "");
     return;
   }
 
   setGithubStatus("OAuth timed out. Try again.", "error");
+  setDeviceCode(start.userCode || "");
 }
 
 async function copyText(text) {
@@ -875,9 +916,13 @@ function wireToolbarActions() {
   });
 
   document.getElementById("gh-save-connection")?.addEventListener("click", async () => {
-    const config = getGithubConfigFromInputs();
-    if (!config.token || !config.owner || !config.repo) {
-      setGithubStatus("Token, owner, and repo are required.", "error");
+    const config = await resolveGithubConfigForBackup();
+    if (!config.owner || !config.repo) {
+      setGithubStatus("Repo owner and repo name are required.", "error");
+      return;
+    }
+    if (!config.token) {
+      setGithubStatus("Connect OAuth or enter a token first.", "error");
       return;
     }
     await chrome.storage.local.set({ [GITHUB_BACKUP_KEY]: config });
@@ -892,17 +937,35 @@ function wireToolbarActions() {
     }
   });
 
+  document.getElementById("gh-device-code-copy")?.addEventListener("click", async () => {
+    const value = document.getElementById("gh-device-code-value")?.textContent || "";
+    if (!value) {
+      return;
+    }
+    try {
+      await copyText(value);
+      setGithubStatus("Device code copied.", "success");
+    } catch (_error) {
+      setGithubStatus("Unable to copy code.", "error");
+    }
+  });
+
   document.getElementById("gh-clear-connection")?.addEventListener("click", async () => {
-    await chrome.storage.local.remove(GITHUB_BACKUP_KEY);
+    await chrome.storage.local.remove([GITHUB_BACKUP_KEY, GITHUB_OAUTH_TOKEN_KEY]);
     await loadGithubSettings();
     setGithubStatus("GitHub connection removed.", "success");
+    setDeviceCode("");
   });
 
   document.getElementById("gh-backup-now")?.addEventListener("click", async () => {
     try {
-      const config = getGithubConfigFromInputs();
-      if (!config.token || !config.owner || !config.repo) {
-        setGithubStatus("Save GitHub connection first.", "error");
+      const config = await resolveGithubConfigForBackup();
+      if (!config.owner || !config.repo) {
+        setGithubStatus("Enter repo owner and repo name first.", "error");
+        return;
+      }
+      if (!config.token) {
+        setGithubStatus("Connect GitHub OAuth or enter a token first.", "error");
         return;
       }
 

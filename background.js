@@ -6,6 +6,8 @@ const CONFIDENCE_THRESHOLD = 0.55;
 
 let dbPromise = null;
 const githubOAuthFlows = new Map();
+const GITHUB_OAUTH_FLOW_KEY = "githubOAuthDeviceFlow";
+const GITHUB_OAUTH_TOKEN_KEY = "githubOAuthToken";
 
 function normalizeTags(tags) {
   if (!Array.isArray(tags)) {
@@ -645,16 +647,19 @@ async function startGithubDeviceFlow(clientId) {
     lastPollAt: 0
   };
   githubOAuthFlows.set(flowId, flow);
+  await chrome.storage.local.set({ [GITHUB_OAUTH_FLOW_KEY]: flow });
   return flow;
 }
 
 async function pollGithubDeviceFlow(flow) {
   if (flow.state !== "pending") {
+    await chrome.storage.local.set({ [GITHUB_OAUTH_FLOW_KEY]: flow });
     return flow;
   }
   if (Date.now() > flow.expiresAt) {
     flow.state = "expired";
     flow.message = "OAuth device code expired.";
+    await chrome.storage.local.set({ [GITHUB_OAUTH_FLOW_KEY]: flow });
     return flow;
   }
   if (Date.now() - flow.lastPollAt < flow.interval * 1000) {
@@ -673,12 +678,14 @@ async function pollGithubDeviceFlow(flow) {
       flow.state = "authorized";
       flow.token = tokenResp.access_token;
       flow.message = "Authorized.";
+      await chrome.storage.local.set({ [GITHUB_OAUTH_FLOW_KEY]: flow });
       return flow;
     }
   } catch (error) {
     const message = error instanceof Error ? error.message : "OAuth polling error.";
     if (/authorization_pending/i.test(message)) {
       flow.state = "pending";
+      await chrome.storage.local.set({ [GITHUB_OAUTH_FLOW_KEY]: flow });
       return flow;
     }
     if (/slow_down/i.test(message)) {
@@ -689,13 +696,16 @@ async function pollGithubDeviceFlow(flow) {
     if (/expired_token/i.test(message)) {
       flow.state = "expired";
       flow.message = "OAuth device code expired.";
+      await chrome.storage.local.set({ [GITHUB_OAUTH_FLOW_KEY]: flow });
       return flow;
     }
     flow.state = "failed";
     flow.message = message;
+    await chrome.storage.local.set({ [GITHUB_OAUTH_FLOW_KEY]: flow });
     return flow;
   }
 
+  await chrome.storage.local.set({ [GITHUB_OAUTH_FLOW_KEY]: flow });
   return flow;
 }
 
@@ -803,21 +813,41 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
   if (message?.type === "GITHUB_OAUTH_DEVICE_STATUS") {
     const flowId = message?.payload?.flowId;
-    const flow = githubOAuthFlows.get(flowId);
-    if (!flow) {
-      sendResponse({ ok: false, message: "OAuth flow not found." });
-      return false;
-    }
-    pollGithubDeviceFlow(flow)
-      .then((next) => {
+    (async () => {
+      let flow = githubOAuthFlows.get(flowId);
+      if (!flow) {
+        const stored = await chrome.storage.local.get([GITHUB_OAUTH_FLOW_KEY]);
+        const persisted = stored?.[GITHUB_OAUTH_FLOW_KEY];
+        if (persisted?.id === flowId) {
+          flow = persisted;
+          githubOAuthFlows.set(flowId, flow);
+        }
+      }
+
+      if (!flow) {
+        sendResponse({ ok: false, message: "OAuth flow not found. Click Connect GitHub OAuth again." });
+        return;
+      }
+
+      const next = await pollGithubDeviceFlow(flow);
+      if (next.state === "authorized" && next.token) {
+        await chrome.storage.local.set({ [GITHUB_OAUTH_TOKEN_KEY]: next.token });
+        await chrome.storage.local.remove(GITHUB_OAUTH_FLOW_KEY);
+        githubOAuthFlows.delete(flowId);
+      }
+
+      if (next.state === "failed" || next.state === "expired") {
+        await chrome.storage.local.remove(GITHUB_OAUTH_FLOW_KEY);
+        githubOAuthFlows.delete(flowId);
+      }
+
         sendResponse({
           ok: true,
           state: next.state,
           token: next.token || null,
           message: next.message || null
         });
-      })
-      .catch((error) => sendResponse({ ok: false, message: error instanceof Error ? error.message : "OAuth status failed." }));
+    })().catch((error) => sendResponse({ ok: false, message: error instanceof Error ? error.message : "OAuth status failed." }));
     return true;
   }
 });

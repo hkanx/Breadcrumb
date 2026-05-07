@@ -823,6 +823,23 @@ textarea:focus,
   gap: 6px;
 }
 
+.gh-device-code-box {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 8px;
+  border: 1px dashed var(--line);
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.08);
+}
+
+.gh-device-code-box code {
+  font-size: 0.95rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+
 .file-btn {
   display: inline-flex;
   align-items: center;
