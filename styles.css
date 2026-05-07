@@ -244,6 +244,18 @@ textarea:focus,
   color: #9affdb;
 }
 
+.options-body.theme-light .status {
+  color: #6f5643;
+}
+
+.options-body.theme-light .status.success {
+  color: #2f6f47;
+}
+
+.options-body.theme-light .status.error {
+  color: #9b3f3f;
+}
+
 .preview-card {
   margin-top: 10px;
   border: 1px solid var(--line);
