@@ -96,6 +96,10 @@
   color: #5d4330;
 }
 
+.options-body .scrap-paragraph + .scrap-paragraph {
+  border-top-color: rgba(141, 111, 85, 0.34);
+}
+
 * {
   box-sizing: border-box;
 }
@@ -594,6 +598,10 @@ textarea:focus,
   color: var(--text);
 }
 
+.options-body.theme-night .scrap-paragraph + .scrap-paragraph {
+  border-top-color: rgba(143, 167, 197, 0.38);
+}
+
 .options-body.theme-night input,
 .options-body.theme-night textarea,
 .options-body.theme-night .search-input,
@@ -705,7 +713,17 @@ textarea:focus,
 .scrap-text {
   margin: 8px 0 0;
   white-space: pre-wrap;
-  line-height: 1.4;
+  line-height: 1.6;
+}
+
+.scrap-paragraph {
+  margin: 0;
+  padding: 6px 0;
+}
+
+.scrap-paragraph + .scrap-paragraph {
+  border-top: 1px solid rgba(255, 255, 255, 0.18);
+  margin-top: 4px;
 }
 
 .edit-form {
@@ -749,8 +767,48 @@ textarea:focus,
   border-radius: 12px;
   background: #0a1525;
   padding: 10px;
+}
+
+.controls-foldout summary {
+  cursor: pointer;
+  list-style: none;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.controls-foldout summary::-webkit-details-marker {
+  display: none;
+}
+
+.controls-foldout summary::before {
+  content: "▸";
+  margin-right: 8px;
+  color: var(--muted);
+}
+
+.controls-foldout[open] summary::before {
+  content: "▾";
+}
+
+.foldout-body {
   display: grid;
   gap: 8px;
+  margin-top: 10px;
+}
+
+.github-backup-panel {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 10px;
+  background: rgba(0, 0, 0, 0.08);
+  display: grid;
+  gap: 8px;
+}
+
+.github-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
 }
 
 .file-btn {
